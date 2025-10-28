@@ -1,16 +1,20 @@
 # 📊 NOLA Schools Financial Tracker  
 
 **Built by Emmanuel Igbokwe**  
+The NOLA Schools Financial Tracker is an interactive Streamlit dashboard that visualizes financial and enrollment metrics for New Orleans charter schools across multiple fiscal years and quarters
 
-The **NOLA Schools Financial Tracker** is an interactive dashboard that allows users to explore and visualize the financial performance of New Orleans charter schools across multiple fiscal years and quarters.  
+With this tool, you can:
+🔎 School Selection – Filter by one or multiple schools.
 
-With this tool, you can:  
+📅 Fiscal Year & Quarter Filtering – View historical trends from FY22 → FY26.
 
-- 🔎 Select one or more **schools**  
-- 📅 Filter by **Fiscal Year & Quarter** (e.g., FY22 Q1 → FY25 Q3)  
-- 📊 Choose a **financial metric** (e.g., Fund Balance, Revenue, Liabilities, Ratios)  
-- 🎨 View results in clear, color-coded **bar charts** with values displayed on top  
-- 📑 Explore formatted data tables (with `$` for financials, `%` for ratios, plain numbers for other metrics)  
+📊 Metric Visualization – Choose metrics like Fund Balance, Revenue, Liabilities, Ratios, and more.
+
+🎨 Interactive Charts – Bar or line charts powered by Plotly Express.
+
+📑 Data Tables – Formatted with $ for financials, % for ratios, and clear numeric formatting for all other values.
+
+🧮 FY26 Enrollment Module – Compare Budget vs. October Enrollment counts and view variances.
 
 ---  
 
