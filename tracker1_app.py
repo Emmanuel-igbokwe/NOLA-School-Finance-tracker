@@ -29,11 +29,11 @@ def load_excel_safe(path_candidates, **read_kwargs):
 # =========================
 # Load FY25 Dataset
 # =========================
-fy25_path = os.path.expanduser("~/Desktop/TRACKER/FY25.xlsx")
-df = load_excel_safe([fy25_path], sheet_name="FY25", header=0)
-
-if df is None:
-    st.error("❌ Could not load FY25.xlsx (sheet: FY25). Ensure it's in Desktop/TRACKER.")
+fy25_path = "FY25.xlsx"  # File in repo root
+try:
+    df = pd.read_excel(fy25_path, sheet_name="FY25", header=0)
+except Exception as e:
+    st.error(f"❌ Could not load {fy25_path}: {e}")
     st.stop()
 
 df.columns = df.columns.str.strip()
@@ -89,14 +89,13 @@ fy_color_map = {"FY22": "purple", "FY23": "red", "FY24": "blue", "FY25": "green"
 # =========================
 # Load FY26 Budget-to-Enrollment
 # =========================
-fy26_path = os.path.expanduser("~/Desktop/TRACKER/Enrollment FY26.xlsx")
-df_budget_raw = load_excel_safe([fy26_path], sheet_name="FY26 Student enrollment", header=1)
+fy26_path = "Enrollment FY26.xlsx"  # File in repo root
+try:
+    df_budget_raw = pd.read_excel(fy26_path, sheet_name="FY26 Student enrollment", header=1)
+except Exception as e:
+    st.warning(f"⚠️ Could not load {fy26_path}: {e}")
+    df_budget_raw = None
 
-if df_budget_raw is not None:
-    df_budget_raw.columns = df_budget_raw.columns.str.strip()
-    # Drop the CMO column if it exists
-    if "CMO" in df_budget_raw.columns:
-        df_budget_raw.drop(columns=["CMO"], inplace=True)
 
     expected_cols = ["Schools", "Fiscal Year", "Budgetted", "October 1 Count",
                      "Variance", "%Variance", "Budget to Enrollment Ratio"]
