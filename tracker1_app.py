@@ -92,10 +92,11 @@ fy_color_map = {"FY22": "purple", "FY23": "red", "FY24": "blue", "FY25": "green"
 fy26_path = "Enrollment FY26.xlsx"  # File in repo root
 try:
     df_budget_raw = pd.read_excel(fy26_path, sheet_name="FY26 Student enrollment", header=1)
-except Exception as e:
-    st.warning(f"⚠️ Could not load {fy26_path}: {e}")
-    df_budget_raw = None
-
+    df_budget_raw.columns = df_budget_raw.columns.str.strip()
+    
+    # Drop the CMO column if it exists
+    if "CMO" in df_budget_raw.columns:
+        df_budget_raw.drop(columns=["CMO"], inplace=True)
 
     expected_cols = ["Schools", "Fiscal Year", "Budgetted", "October 1 Count",
                      "Variance", "%Variance", "Budget to Enrollment Ratio"]
@@ -110,8 +111,9 @@ except Exception as e:
 
     fiscal_options_budget = sorted(df_budget_long["Fiscal Year"].dropna().unique(), key=sort_fy)
     school_options_budget = sorted(df_budget_long["Schools"].dropna().unique())
-else:
-    st.warning("⚠️ FY26 file not found or sheet 'FY26 Student enrollment' missing.")
+
+except Exception as e:
+    st.warning(f"⚠️ Could not load {fy26_path} or sheet 'FY26 Student enrollment': {e}")
     df_budget_long = pd.DataFrame()
     fiscal_options_budget, school_options_budget = [], []
 
