@@ -218,5 +218,4 @@ if not filtered.empty:
     st.dataframe(df_display)
 
 else:
-    st.warning("⚠️ Welcome To Finance Accountability Realtime Dashboard. Try Adjusting your Left filters.")
-
+    st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
