@@ -530,110 +530,6 @@ elif metric_group == "Budget to Enrollment":
     else:
         st.warning("⚠️ No Budget to Enrollment data matches your filters.")
 
-# =========================
-# CSAF PREDICTED SECTION
-# =========================
-elif metric_group == "CSAF Predicted":
-    st.markdown("## 🔮 CSAF Predicted Metrics (FY22–FY28)")
-    st.markdown("<p style='color:gray;'>Predictive modeling using historical CSAF trends</p>", unsafe_allow_html=True)
-
-    # --- Define CSAF formulas & thresholds ---
-    csaf_formulas = {
-        "FB Ratio": (
-            "Fund Balance Ratio",
-            "Unrestricted Fund Balance ÷ Total Expenses",
-            0.10,
-            "≥ 10%"
-        ),
-        "Liabilities to Assets": (
-            "Liabilities to Assets Ratio",
-            "Total Liabilities ÷ Total Assets",
-            0.90,
-            "≤ 0.90"
-        ),
-        "Current Ratio": (
-            "Current Ratio",
-            "Current Assets ÷ Current Liabilities",
-            1.50,
-            "≥ 1.5"
-        ),
-        "Unrestricted Days COH": (
-            "Unrestricted Days Cash on Hand",
-            "Unrestricted Cash ÷ ((Total Exp. - Depreciation) ÷ 365)",
-            60,
-            "≥ 60 days"
-
-
-        )
-    }
-
-    # --- Sidebar controls ---
-    schools = sorted(df["Schools"].unique())
-    selected_school = st.sidebar.selectbox("🏫 Select School:", schools)
-    selected_metric = st.sidebar.selectbox("📊 Choose Metric:", list(csaf_formulas.keys()))
-    viz_type_local = st.sidebar.selectbox("📈 Visualization Type:", ["Bar Chart", "Line Chart"])
-
-    # --- Retrieve selected formula ---
-    metric_label, formula_txt, threshold, best_practice = csaf_formulas[selected_metric]
-
-    # --- Filter data for selected school & metric ---
-    df_sel = df_long[(df_long["Schools"] == selected_school) & (df_long["Metric"] == selected_metric)].copy()
-    df_sel["sort_key"] = df_sel["Fiscal Year"].apply(sort_fy)
-    df_sel = df_sel.sort_values("sort_key")
-
-    # --- Ensure data is numeric ---
-    df_sel["Value"] = pd.to_numeric(df_sel["Value"], errors="coerce")
-
-    # --- Only predict if enough data ---
-    if len(df_sel) >= 3:
-        from sklearn.linear_model import LinearRegression
-        import numpy as np
-
-        X = np.arange(len(df_sel)).reshape(-1, 1)
-        y = df_sel["Value"].values
-
-        model = LinearRegression()
-        model.fit(X, y)
-
-        # Predict 2 future points (FY26 & FY27)
-        future_X = np.arange(len(df_sel), len(df_sel) + 2).reshape(-1, 1)
-        y_pred = model.predict(future_X)
-
-        future_fy = [f"FY26 Q{i}" for i in range(1, 4)] + [f"FY27 Q{i}" for i in range(1, 4)]
-        pred_df = pd.DataFrame({
-            "Fiscal Year": future_fy[:len(y_pred)],
-            "Value": y_pred[:len(future_fy)]
-        })
-        pred_df["Type"] = "Predicted"
-
-        df_sel["Type"] = "Actual"
-        combined = pd.concat([df_sel[["Fiscal Year", "Value", "Type"]], pred_df], ignore_index=True)
-
-        # --- Visualization ---
-        title = f"{selected_school} — {selected_metric} Prediction"
-        if viz_type_local == "Line Chart":
-            fig = px.line(
-                combined, x="Fiscal Year", y="Value", color="Type",
-                color_discrete_map={"Actual": "blue", "Predicted": "red"},
-                markers=True, title=title
-            )
-        else:
-            fig = px.bar(
-                combined, x="Fiscal Year", y="Value", color="Type",
-                color_discrete_map={"Actual": "blue", "Predicted": "red"},
-                barmode="group", text="Value", title=title
-            )
-
-        fig.add_hline(y=threshold, line_dash="dot", line_color="green")
-        st.plotly_chart(fig, use_container_width=True)
-
-        # --- Data table and summary ---
-        st.markdown(f"**Formula Used:** {formula_txt}")
-        st.markdown(f"**Best Practice:** {best_practice}")
-        st.dataframe(combined, use_container_width=True)
-    else:
-        st.warning("⚠️ Not enough historical data to predict for this metric.")
-
 
 # =========================
 # FY25 (CSAF + Other) — unchanged visuals
@@ -761,4 +657,5 @@ else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.") 
      
      
+
 
