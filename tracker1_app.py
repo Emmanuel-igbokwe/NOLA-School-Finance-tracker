@@ -233,7 +233,7 @@ if metric_group == "CSAF Predicted":
     )
 
     n_future = st.sidebar.slider("🔮 Forecast horizon (quarters)", 3, 9, 6)  # 6 = FY26–FY27 Q1–Q3
-    viz_type_local = st.sidebar.selectbox("📈 Visualization Type:", ["Line Chart", "Bar Chart"])
+    #viz_type_local = st.sidebar.selectbox("📈 Visualization Type:", ["Line Chart", "Bar Chart"])
     run_pred = st.sidebar.button("▶ Run Prediction")
 
     # ---------- Helpers ----------
@@ -657,5 +657,6 @@ else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.") 
      
      
+
 
 
