@@ -759,16 +759,6 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.") 
-      # trial erros == if g10 is penpedicular to xas' then projas (dec..asp)
-      # elif metrics = jump trial errors (csaf_predictive)
-      # else:
-            if viz == "line chart":
-    # suportive direction (trace cfm app ;log1); senn index)):
-       # acl_data == formula;
-       # hypodynamic syntax == return f"% {val:.2f}
-       # else, dampa_down......r45;cr
-      # elif, the symbol of cycle_tt index pattern {yi'pt}
-           # except:
-                    # pair data, in a to accomodate all artifial inverse learning.. op_transposed
-      # else, reject metric_result;;u'''semi based correspondent'tt'jped
      
+     
+
