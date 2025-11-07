@@ -156,16 +156,27 @@ try:
     if "CMO" in df_budget_raw.columns:
         df_budget_raw.drop(columns=["CMO"], inplace=True)
 
-    expected_cols = ["Schools", "Fiscal Year", "Budgetted", "October 1 Count",
-                     "Variance", "%Variance", "Budget to Enrollment Ratio"]
-    df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"])
+   expected_cols = [
+    "Schools",
+    "Fiscal Year",
+    "Budgetted",
+    "October 1 Count",
+    "February 1 Count",
+    "Average Enrollment",
+    "Variance",
+    "%Variance",
+    "Budget to Enrollment Ratio",
+    "Feb to Oct Enrollment Ratio"
+]
 
-    df_budget_long = df_budget_raw.melt(
-        id_vars=["Schools", "Fiscal Year"],
-        value_vars=[c for c in expected_cols if c in df_budget_raw.columns],
-        var_name="Metric",
-        value_name="Value"
-    )
+df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"])
+
+df_budget_long = df_budget_raw.melt(
+    id_vars=["Schools", "Fiscal Year"],
+    value_vars=[c for c in expected_cols if c in df_budget_raw.columns],
+    var_name="Metric",
+    value_name="Value"
+)
 
     fiscal_options_budget = sorted(df_budget_long["Fiscal Year"].dropna().unique(), key=sort_fy)
     school_options_budget = sorted(df_budget_long["Schools"].dropna().unique())
@@ -179,11 +190,20 @@ except Exception as e:
 budget_metric_color_map = {
     "Budgetted": "#1f77b4",
     "October 1 Count": "#2ca02c",
+    "February 1 Count": "#17becf",
+    "Average Enrollment": "#8c564b",
     "Variance": "#d62728",
     "%Variance": "#9467bd",
     "Budget to Enrollment Ratio": "#ff7f0e",
+    "Feb to Oct Enrollment Ratio": "#bcbd22",
 }
-percent_metrics_budget = {"%Variance", "Budget to Enrollment Ratio"}
+
+# === Metrics that should be displayed as percentages
+percent_metrics_budget = {
+    "%Variance",
+    "Budget to Enrollment Ratio",
+    "Feb to Oct Enrollment Ratio"
+}
 
 # =========================
 # UI
@@ -669,6 +689,7 @@ else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.") 
      
      
+
 
 
 
