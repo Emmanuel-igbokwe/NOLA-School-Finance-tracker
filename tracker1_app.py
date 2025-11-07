@@ -169,7 +169,7 @@ try:
         "Variance",
         "%Variance",
         "Budget to Enrollment Ratio",
-        "Feb–Oct Enrollment Ratio"
+        "Feb-Oct Enrollment Ratio"
     ]
 
     # Drop rows missing school or FY
@@ -200,14 +200,14 @@ budget_metric_color_map = {
     "Variance": "#d62728",
     "%Variance": "#9467bd",
     "Budget to Enrollment Ratio": "#ff7f0e",
-    "Feb to Oct Enrollment Ratio": "#bcbd22",
+    "Feb-Oct Enrollment Ratio": "#bcbd22",
 }
 
 # === Metrics that should be displayed as percentages
 percent_metrics_budget = {
     "%Variance",
     "Budget to Enrollment Ratio",
-    "Feb to Oct Enrollment Ratio"
+    "Feb-Oct Enrollment Ratio"
 }
 
 # =========================
@@ -478,7 +478,7 @@ elif metric_group == "Budget to Enrollment":
         "Variance",
         "%Variance",
         "Budget to Enrollment Ratio",
-        "Feb to Oct Enrollment Ratio"
+        "Feb-Oct Enrollment Ratio"
     ]
     metrics_list = [m for m in metrics_list if m in df_budget_long["Metric"].unique()]
     selected_metrics = st.sidebar.multiselect("Select Metrics:", metrics_list)
@@ -694,6 +694,7 @@ else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.") 
      
      
+
 
 
 
