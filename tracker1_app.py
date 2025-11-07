@@ -439,11 +439,22 @@ elif metric_group == "Budget to Enrollment":
     selected_schools = st.sidebar.multiselect("Select School(s):", school_options_budget)
     if st.sidebar.checkbox("Select All Budget Schools"):
         selected_schools = school_options_budget
+
     selected_fy = st.sidebar.multiselect("Select Fiscal Year(s):", fiscal_options_budget)
     if st.sidebar.checkbox("Select All Budget Fiscal Years"):
         selected_fy = fiscal_options_budget
 
-    metrics_list = ["Budgetted", "October 1 Count", "Variance", "%Variance", "Budget to Enrollment Ratio"]
+    # ✅ UPDATED: Include new metrics here
+    metrics_list = [
+        "Budgetted",
+        "October 1 Count",
+        "February 1 Count",
+        "Average Enrollment",
+        "Variance",
+        "%Variance",
+        "Budget to Enrollment Ratio",
+        "Feb to Oct Enrollment Ratio"
+    ]
     metrics_list = [m for m in metrics_list if m in df_budget_long["Metric"].unique()]
     selected_metrics = st.sidebar.multiselect("Select Metrics:", metrics_list)
 
@@ -483,20 +494,19 @@ elif metric_group == "Budget to Enrollment":
                 title=title
             )
 
-            # Adjust number formatting for each trace
+            # === UPDATED FORMATTING ===
             for tr in fig.data:
                 name = tr.name
-                if name in percent_metrics_budget:
+                if name in percent_metrics_budget or "Ratio" in name:
                     subset = df_f[df_f["Metric"] == name]["Value"]
                     if subset.max() <= 1.2:
                         tr.texttemplate = "%{text:.0%}"
                     else:
                         tr.texttemplate = "%{text:,.2f}%"
-                elif name in {"Budgetted", "October 1 Count", "Variance"}:
+                elif name in {"Budgetted", "October 1 Count", "February 1 Count", "Average Enrollment", "Variance"}:
                     tr.texttemplate = "%{text:,.0f}"
                 else:
                     tr.texttemplate = "%{text}"
-
             fig.update_traces(textposition="outside")
 
         # === Layout formatting ===
@@ -514,7 +524,7 @@ elif metric_group == "Budget to Enrollment":
         def fmt_budget(row):
             m, v = row["Metric"], row["Value"]
             try:
-                if m in percent_metrics_budget:
+                if m in percent_metrics_budget or "Ratio" in m:
                     if df_f[df_f["Metric"] == m]["Value"].max() <= 1.2:
                         return f"{v:.0%}"
                     else:
@@ -659,6 +669,7 @@ else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.") 
      
      
+
 
 
 
