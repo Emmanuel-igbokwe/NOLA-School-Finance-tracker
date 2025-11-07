@@ -153,30 +153,35 @@ fy26_path = "Enrollment FY26.xlsx"  # File in repo root
 try:
     df_budget_raw = pd.read_excel(fy26_path, sheet_name="FY26 Student enrollment", header=1)
     df_budget_raw.columns = df_budget_raw.columns.str.strip()
+
+    # Drop CMO column if present
     if "CMO" in df_budget_raw.columns:
         df_budget_raw.drop(columns=["CMO"], inplace=True)
 
-   expected_cols = [
-    "Schools",
-    "Fiscal Year",
-    "Budgetted",
-    "October 1 Count",
-    "February 1 Count",
-    "Average Enrollment",
-    "Variance",
-    "%Variance",
-    "Budget to Enrollment Ratio",
-    "Feb to Oct Enrollment Ratio"
-]
+    # ✅ Updated to include new metrics
+    expected_cols = [
+        "Schools",
+        "Fiscal Year",
+        "Budgetted",
+        "October 1 Count",
+        "February 1 Count",
+        "Average Enrollment",
+        "Variance",
+        "%Variance",
+        "Budget to Enrollment Ratio",
+        "Feb–Oct Enrollment Ratio"
+    ]
 
-df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"])
+    # Drop rows missing school or FY
+    df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"])
 
-df_budget_long = df_budget_raw.melt(
-    id_vars=["Schools", "Fiscal Year"],
-    value_vars=[c for c in expected_cols if c in df_budget_raw.columns],
-    var_name="Metric",
-    value_name="Value"
-)
+    # Melt the table into long format
+    df_budget_long = df_budget_raw.melt(
+        id_vars=["Schools", "Fiscal Year"],
+        value_vars=[c for c in expected_cols if c in df_budget_raw.columns],
+        var_name="Metric",
+        value_name="Value"
+    )
 
     fiscal_options_budget = sorted(df_budget_long["Fiscal Year"].dropna().unique(), key=sort_fy)
     school_options_budget = sorted(df_budget_long["Schools"].dropna().unique())
@@ -689,6 +694,7 @@ else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.") 
      
      
+
 
 
 
