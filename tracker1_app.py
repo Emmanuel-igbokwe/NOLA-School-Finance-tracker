@@ -88,83 +88,6 @@ def load_excel_safe(path_candidates, **read_kwargs):
             pass
     return None
 
-def _extract_selected_points(plotly_state):
-    """
-    Streamlit chart selections return a dict-like object.
-    We try multiple shapes to be robust across versions.
-    """
-    try:
-        # Newer style: plotly_state is a dict with "selection"
-        if isinstance(plotly_state, dict):
-            sel = plotly_state.get("selection", {})
-            if isinstance(sel, dict):
-                return sel.get("points", []) or []
-            # Sometimes points are at top-level
-            return plotly_state.get("points", []) or []
-    except Exception:
-        pass
-
-    # Fallback: attribute-style (rare)
-    try:
-        sel = getattr(plotly_state, "selection", None)
-        if sel:
-            return sel.get("points", []) or []
-    except Exception:
-        pass
-
-    return []
-
-def show_point_details_under_chart(fig, key, show_details=True, title="✅ Selected data point"):
-    """
-    Renders a Plotly chart with point-selection enabled, and shows clicked point details under it.
-    """
-    plotly_state = st.plotly_chart(
-        fig,
-        use_container_width=True,
-        key=key,
-        on_select="rerun",
-        selection_mode=("points",),  # points selection
-    )
-
-    if not show_details:
-        return
-
-    pts = _extract_selected_points(plotly_state)
-    if pts:
-        p = pts[0]
-        # p usually includes x, y, curveNumber, pointNumber, customdata, etc.
-        st.markdown(f"### {title}")
-
-        # Normalize customdata
-        custom = p.get("customdata", None)
-        if custom is None:
-            custom = []
-
-        # Build a readable dictionary
-        details = {
-            "x": p.get("x", None),
-            "y (Value)": p.get("y", None),
-        }
-
-        # If customdata exists and is list-like, map common fields
-        # We will display them generically to avoid crashes on facet charts.
-        if isinstance(custom, (list, tuple)) and len(custom) > 0:
-            # Attempt standard mapping used below
-            # For FY25 / Budget: ["Schools","Fiscal Year","Metric"]
-            if len(custom) >= 3:
-                details.update({
-                    "School": custom[0],
-                    "Fiscal Year / Quarter": custom[1],
-                    "Metric": custom[2],
-                })
-            else:
-                details["customdata"] = custom
-        else:
-            if custom not in (None, []):
-                details["customdata"] = custom
-
-        st.write(details)
-
 # =========================
 # Load FY25 Dataset
 # =========================
@@ -274,9 +197,6 @@ percent_metrics_budget = {"%Variance", "Budget to Enrollment Ratio"}
 st.title("📊 NOLA Schools Financial Tracker")
 st.markdown("<p style='font-size:14px;color:gray;'>Built by Emmanuel Igbokwe</p>", unsafe_allow_html=True)
 st.sidebar.header("🔎 Filters")
-
-# NEW: selection toggle
-show_click_details = st.sidebar.checkbox("🖱️ Show selected data point on click", value=True)
 
 modes = ["CSAF Metrics", "CSAF Predicted", "Other Metrics"]
 if not df_budget_long.empty:
@@ -404,6 +324,7 @@ if metric_group == "CSAF Predicted":
 
     # ---------- Forecast methods ----------
     def forecast_seasonal_naive(y, q, n_future):
+        # repeats last year's same quarter (3-quarter seasonality)
         result = []
         for i in range(n_future):
             idx = len(y) - 3 + i - (i // 3) * 3
@@ -418,6 +339,7 @@ if metric_group == "CSAF Predicted":
         Qd = seasonal_groups(q)
         X = np.hstack([t, Qd])
 
+        # log1p for stability; clip to avoid negatives in log transform
         y_log = np.log1p(np.clip(y, 0, None))
         model = HuberRegressor().fit(X, y_log)
 
@@ -466,9 +388,10 @@ if metric_group == "CSAF Predicted":
     else:
         y_future = forecast_trend_times_seasonal(y_hist, q_hist, n_future)
 
+    # ✅ Future labels start AFTER the frozen origin, not after newest actual
     future_labels = make_future_labels(train_through, n_future, quarters_per_year=3)
 
-    # --- Latest ACTUAL from file ---
+    # --- Latest ACTUAL from file (updates whenever Excel updates) ---
     actual_now = df[df["Schools"] == selected_school].copy()
     actual_now["sort_key"] = actual_now["Fiscal Year"].apply(sort_fy)
     actual_now = actual_now.sort_values("sort_key")
@@ -508,8 +431,7 @@ if metric_group == "CSAF Predicted":
             color="Type",
             color_discrete_map={"Actual": "blue", "Forecast (Frozen)": "red"},
             markers=True,
-            title=f"{selected_school} — {selected_metric} (Actual vs Frozen Forecast)",
-            custom_data=["Quarter", "Type"],
+            title=f"{selected_school} — {selected_metric} (Actual vs Frozen Forecast)"
         )
     else:
         fig = px.bar(
@@ -520,14 +442,14 @@ if metric_group == "CSAF Predicted":
             color_discrete_map={"Actual": "blue", "Forecast (Frozen)": "red"},
             barmode="group",
             text="Value",
-            title=f"{selected_school} — {selected_metric} (Actual vs Frozen Forecast)",
-            custom_data=["Quarter", "Type"],
+            title=f"{selected_school} — {selected_metric} (Actual vs Frozen Forecast)"
         )
-
-    fig.update_traces(
-        hovertemplate=f"School: {selected_school}<br>Metric: {selected_metric}<br>"
-                      f"Quarter: %{{x}}<br>Type: %{{customdata[1]}}<br>Value: %{{y}}<extra></extra>"
-    )
+        if selected_metric == "FB Ratio":
+            fig.update_traces(texttemplate="%{y:.1%}", textposition="outside")
+        elif selected_metric in ("Liabilities to Assets", "Current Ratio"):
+            fig.update_traces(texttemplate="%{y:.2f}", textposition="outside")
+        else:
+            fig.update_traces(texttemplate="%{y:,.0f}", textposition="outside")
 
     # --- Best practice line ---
     if "≥" in best_label:
@@ -565,14 +487,7 @@ if metric_group == "CSAF Predicted":
         pass
 
     fig.update_layout(height=560, legend_title="Series")
-
-    # ✅ clickable point details
-    show_point_details_under_chart(
-        fig,
-        key="pred_chart",
-        show_details=show_click_details,
-        title="✅ Selected data point (Actual/Forecast)"
-    )
+    st.plotly_chart(fig, use_container_width=True)
 
     # --- Forecast table (frozen) ---
     def fmt(v):
@@ -630,8 +545,7 @@ elif metric_group == "Budget to Enrollment":
                 markers=True,
                 facet_col="Schools",
                 facet_col_wrap=2,
-                title=title,
-                custom_data=["Schools", "Fiscal Year", "Metric"],
+                title=title
             )
         else:
             fig = px.bar(
@@ -642,8 +556,7 @@ elif metric_group == "Budget to Enrollment":
                 text="Value",
                 facet_col="Schools",
                 facet_col_wrap=2,
-                title=title,
-                custom_data=["Schools", "Fiscal Year", "Metric"],
+                title=title
             )
 
             for tr in fig.data:
@@ -660,10 +573,6 @@ elif metric_group == "Budget to Enrollment":
                     tr.texttemplate = "%{text}"
             fig.update_traces(textposition="outside")
 
-        fig.update_traces(
-            hovertemplate="School: %{customdata[0]}<br>FY: %{customdata[1]}<br>Metric: %{customdata[2]}<br>Value: %{y}<extra></extra>"
-        )
-
         fig.update_xaxes(tickangle=45)
         fig.update_layout(
             height=700,
@@ -672,13 +581,7 @@ elif metric_group == "Budget to Enrollment":
             bargap=0.15,
             bargroupgap=0.05
         )
-
-        show_point_details_under_chart(
-            fig,
-            key="budget_chart",
-            show_details=show_click_details,
-            title="✅ Selected data point (Budget to Enrollment)"
-        )
+        st.plotly_chart(fig, use_container_width=True)
 
         def fmt_budget(row):
             m, v = row["Metric"], row["Value"]
@@ -702,7 +605,7 @@ elif metric_group == "Budget to Enrollment":
         st.warning("⚠️ No Budget to Enrollment data matches your filters.")
 
 # =========================
-# FY25 (CSAF + Other) — with click-to-show-point enabled
+# FY25 (CSAF + Other) — unchanged visuals
 # =========================
 else:
     school_options = sorted(df_long["Schools"].dropna().unique())
@@ -742,14 +645,12 @@ else:
             if viz_type == "Bar Chart":
                 fig = px.bar(
                     filtered, x="Fiscal Year", y="Value",
-                    color="Schools", barmode="group", text="Value", title=chart_title,
-                    custom_data=["Schools", "Fiscal Year", "Metric"],
+                    color="Schools", barmode="group", text="Value", title=chart_title
                 )
             else:
                 fig = px.line(
                     filtered, x="Fiscal Year", y="Value",
-                    color="Schools", markers=True, title=chart_title,
-                    custom_data=["Schools", "Fiscal Year", "Metric"],
+                    color="Schools", markers=True, title=chart_title
                 )
             fig.update_xaxes(tickangle=45, automargin=True)
         else:
@@ -765,22 +666,14 @@ else:
                 fig = px.bar(
                     filtered, x="Fiscal Year", y="Value",
                     color="FY Group", color_discrete_map=fy_color_map,
-                    barmode="group", text="Value", title=chart_title,
-                    custom_data=["Schools", "Fiscal Year", "Metric"],
-                    **facet_args
+                    barmode="group", text="Value", title=chart_title, **facet_args
                 )
             else:
                 fig = px.line(
                     filtered, x="Fiscal Year", y="Value",
                     color="FY Group", color_discrete_map=fy_color_map,
-                    markers=True, title=chart_title,
-                    custom_data=["Schools", "Fiscal Year", "Metric"],
-                    **facet_args
+                    markers=True, title=chart_title, **facet_args
                 )
-
-        fig.update_traces(
-            hovertemplate="School: %{customdata[0]}<br>FY: %{customdata[1]}<br>Metric: %{customdata[2]}<br>Value: %{y}<extra></extra>"
-        )
 
         fiscal_order = filtered["Fiscal Year"].unique().tolist()
         fig.update_xaxes(categoryorder="array", categoryarray=fiscal_order)
@@ -814,13 +707,7 @@ else:
             if viz_type == "Bar Chart":
                 fig.update_traces(texttemplate="%{text:,.0f}")
 
-        # ✅ clickable point details
-        show_point_details_under_chart(
-            fig,
-            key="fy25_main_chart",
-            show_details=show_click_details,
-            title="✅ Selected data point (FY25 Dashboard)"
-        )
+        st.plotly_chart(fig, use_container_width=True)
 
         def format_value(val, metric):
             try:
@@ -841,3 +728,4 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
