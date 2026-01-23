@@ -587,6 +587,7 @@ elif metric_group == "Budget to Enrollment":
     if st.sidebar.checkbox("Select All Budget Fiscal Years"):
         selected_fy = fiscal_options_budget
 
+    # ✅ Only the metrics you want (no Variance / %Variance)
     metrics_list = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     metrics_list = [m for m in metrics_list if m in df_budget_long["Metric"].unique()]
     selected_metrics = st.sidebar.multiselect("Select Metrics:", metrics_list)
@@ -595,80 +596,102 @@ elif metric_group == "Budget to Enrollment":
         (df_budget_long["Schools"].isin(selected_schools)) &
         (df_budget_long["Fiscal Year"].isin(selected_fy)) &
         (df_budget_long["Metric"].isin(selected_metrics))
-    ]
+    ].copy()
 
-    if not df_f.empty:
-        df_f = df_f.copy()
-        df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy)
-        df_f = df_f.sort_values("sort_key")
+    if df_f.empty:
+        st.warning("⚠️ No Budget to Enrollment data matches your filters.")
+        st.stop()
 
-        title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)}"
+    df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy)
+    df_f = df_f.sort_values("sort_key")
 
-        if viz_type == "Line Chart":
-            fig = px.line(
-                df_f, x="Fiscal Year", y="Value",
-                color="Metric",
-                color_discrete_map=budget_metric_color_map,
-                markers=True,
-                facet_col="Schools",
-                facet_col_wrap=2,
-                title=title
-            )
-        else:
-            fig = px.bar(
-                df_f, x="Fiscal Year", y="Value",
-                color="Metric",
-                color_discrete_map=budget_metric_color_map,
-                barmode="group",
-                text="Value",
-                facet_col="Schools",
-                facet_col_wrap=2,
-                title=title
-            )
+    title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)}"
 
-            for tr in fig.data:
-    name = tr.name
-    if name in percent_metrics_budget:
-        subset = df_f[df_f["Metric"] == name]["Value"]
-        if subset.max() <= 1.2:
-            tr.texttemplate = "%{text:.0%}"
-        else:
-            tr.texttemplate = "%{text:,.2f}%"
-    elif name in {"Budgetted", "October 1 Count", "February 1 Count"}:
-        tr.texttemplate = "%{text:,.0f}"
-    else:
-        tr.texttemplate = "%{text}"
-
-            fig.update_traces(textposition="outside")
-
-        fig.update_xaxes(tickangle=45)
-        fig.update_layout(
-            height=700,
-            legend_title="Metric",
-            title_x=0.5,
-            bargap=0.15,
-            bargroupgap=0.05
+    # -------------------------
+    # Charts
+    # -------------------------
+    if viz_type == "Line Chart":
+        # ✅ Line chart: NO data labels (no text) — keep your colors
+        fig = px.line(
+            df_f,
+            x="Fiscal Year",
+            y="Value",
+            color="Metric",
+            color_discrete_map=budget_metric_color_map,
+            markers=True,
+            facet_col="Schools",
+            facet_col_wrap=2,
+            title=title
         )
-        st.plotly_chart(fig, use_container_width=True)
+        # Make sure line charts do not show bar-like labels
+        fig.update_traces(text=None)
 
-        def fmt_budget(row):
-    m, v = row["Metric"], row["Value"]
-    try:
-        if m == "Budget to Enrollment Ratio":
-            return f"{v:.2f}"
-        elif m in {"Budgetted", "October 1 Count", "February 1 Count"}:
-            return f"{v:,.0f}"
-        else:
+    else:
+        # ✅ Bar chart: show labels — keep your colors
+        fig = px.bar(
+            df_f,
+            x="Fiscal Year",
+            y="Value",
+            color="Metric",
+            color_discrete_map=budget_metric_color_map,
+            barmode="group",
+            text="Value",
+            facet_col="Schools",
+            facet_col_wrap=2,
+            title=title
+        )
+
+        # ✅ Format bar labels correctly
+        for tr in fig.data:
+            name = tr.name
+
+            if name == "Budget to Enrollment Ratio":
+                subset = df_f[df_f["Metric"] == name]["Value"]
+                if not subset.empty and subset.max() <= 1.2:
+                    tr.texttemplate = "%{text:.0%}"
+                else:
+                    tr.texttemplate = "%{text:,.2f}"
+
+            elif name in {"Budgetted", "October 1 Count", "February 1 Count"}:
+                tr.texttemplate = "%{text:,.0f}"
+
+            else:
+                tr.texttemplate = "%{text}"
+
+        fig.update_traces(textposition="outside")
+
+    fig.update_xaxes(tickangle=45)
+    fig.update_layout(
+        height=700,
+        legend_title="Metric",
+        title_x=0.5,
+        bargap=0.15,
+        bargroupgap=0.05
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # -------------------------
+    # Table formatting
+    # -------------------------
+    def fmt_budget(row):
+        m, v = row["Metric"], row["Value"]
+        try:
+            if m == "Budget to Enrollment Ratio":
+                return f"{v:.0%}" if float(v) <= 1.2 else f"{float(v):,.2f}"
+            elif m in {"Budgetted", "October 1 Count", "February 1 Count"}:
+                return f"{float(v):,.0f}"
+            else:
+                return v
+        except:
             return v
-    except:
-        return v
 
+    df_show = df_f.copy()
+    df_show["Formatted Value"] = df_show.apply(fmt_budget, axis=1)
+    df_show = df_show[["Schools", "Fiscal Year", "Metric", "Formatted Value"]]
 
-        df_show = df_f.copy()
-        df_show["Formatted Value"] = df_show.apply(fmt_budget, axis=1)
-        df_show = df_show[["Schools", "Fiscal Year", "Metric", "Formatted Value"]]
-        st.markdown("### 📋 Budget to Enrollment Data (By School)")
-        st.dataframe(df_show, use_container_width=True)
+    st.markdown("### 📋 Budget to Enrollment Data (By School)")
+    st.dataframe(df_show, use_container_width=True)
+
     else:
         st.warning("⚠️ No Budget to Enrollment data matches your filters.")
 
@@ -796,6 +819,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
