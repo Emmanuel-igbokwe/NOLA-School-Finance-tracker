@@ -651,17 +651,17 @@ elif metric_group == "Budget to Enrollment":
         st.plotly_chart(fig, use_container_width=True)
 
         def fmt_budget(row):
-            m, v = row["Metric"], row["Value"]
-            try:
-                if m in percent_metrics_budget:
-                    if df_f[df_f["Metric"] == m]["Value"].max() <= 1.2:
-                        return f"{v:.0%}"
-                    else:
-                        return f"{v:,.2f}%"
-                else:
-                    return f"{v:,.0f}"
-            except:
-                return v
+    m, v = row["Metric"], row["Value"]
+    try:
+        if m == "Budget to Enrollment Ratio":
+            return f"{v:.2f}"
+        elif m in {"Budgetted", "October 1 Count", "February 1 Count"}:
+            return f"{v:,.0f}"
+        else:
+            return v
+    except:
+        return v
+
 
         df_show = df_f.copy()
         df_show["Formatted Value"] = df_show.apply(fmt_budget, axis=1)
@@ -795,6 +795,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
