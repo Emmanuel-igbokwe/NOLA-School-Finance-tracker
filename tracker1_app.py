@@ -67,10 +67,6 @@ with col2:
 # Helper functions
 # =========================
 def sort_fy(x):
-    """
-    Expected label formats like: 'FY25 Q1', 'FY26 Q2', etc.
-    Returns (year, quarter) for sorting.
-    """
     try:
         parts = str(x).split()
         year = int(parts[0][2:]) if parts[0].startswith("FY") else 999
@@ -78,11 +74,9 @@ def sort_fy(x):
         return (year, q)
     except:
         return (999, 9)
- def sort_fy_only(x):
-    """
-    Sort fiscal years like FY22, FY23, FY24 correctly
-    (used for Budget-to-Enrollment which has no quarters)
-    """
+
+
+def sort_fy_only(x):
     try:
         return int(str(x).replace("FY", "").strip())
     except:
@@ -816,6 +810,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
