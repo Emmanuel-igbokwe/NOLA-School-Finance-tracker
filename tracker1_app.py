@@ -20,24 +20,8 @@ with col1:
     if os.path.exists(logo_path):
         with open(logo_path, "rb") as f:
             encoded_logo = base64.b64encode(f.read()).decode()
-        st.markdown(
-            f"""
-            <div style="text-align:center;">
-                <img src="data:image/png;base64,{encoded_logo}" width="100"
-                    style="
-                        animation: spin 5s linear infinite;
-                        border-radius: 50%;
-                    ">
-            </div>
-            <style>
-                @keyframes spin {{
-                    from {{ transform: rotate(0deg); }}
-                    to {{ transform: rotate(360deg); }}
-                }}
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
+        # Show logo (static), the previous HTML had an issue rendering <img>
+        st.image(logo_path, width=100)
     else:
         st.warning("⚠️ Logo not found in app directory.")
 
@@ -64,11 +48,12 @@ with col2:
 # =========================
 # VISUAL CONSTANTS + YEAR RANGES
 # =========================
-BASE_FONT_SIZE = 16
-BASE_LABEL_FONT_SIZE = 15
-BASE_TEXT_FONT_SIZE = 15
-BASE_HEIGHT_TALL = 780
-BASE_HEIGHT_TALLER = 840
+BASE_FONT_SIZE = 18            # ↑ font
+BASE_LABEL_FONT_SIZE = 17      # ↑ axis label font
+BASE_TEXT_FONT_SIZE = 17       # ↑ data label font
+UNIFORM_TEXT_MIN = 16          # ensure labels render
+BASE_HEIGHT_TALL = 820
+BASE_HEIGHT_TALLER = 900
 
 # Fixed windows for Budget/Enrollment
 START_FY = 22        # FY22
@@ -126,10 +111,26 @@ def normalize_col(c):
 def clean_series(y):
     return pd.to_numeric(pd.Series(y), errors="coerce").values.astype(float)
 
-def pad_years_actual(df_in, schools, metrics, years):
+def thicken_and_enlarge(fig, height=None):
+    """Apply consistent thick bars and larger fonts/labels."""
+    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE, marker_line_width=0)
+    fig.update_layout(
+        height=height or BASE_HEIGHT_TALL,
+        font=dict(size=BASE_FONT_SIZE),
+        legend_font=dict(size=BASE_FONT_SIZE),
+        bargap=0.05,       # ↓ gap → thicker bars
+        bargroupgap=0.03,  # ↓ group gap → thicker bars
+        uniformtext_minsize=UNIFORM_TEXT_MIN,
+        uniformtext_mode="show",
+        margin=dict(t=80, b=90)
+    )
+    return fig
+
+# -------- Padding for Budget charts to guarantee FY labels show --------
+def pad_years_actual(df_in, schools, metrics, years, eps=1e-4):
     """
     Ensure all FYs in 'years' exist for every selected (School, Metric).
-    Fill missing with Value=0 (so x-axis shows the category).
+    If missing, fill Value=eps (so bar is visible) and show text '0'.
     """
     if not schools or not metrics:
         return df_in
@@ -140,13 +141,18 @@ def pad_years_actual(df_in, schools, metrics, years):
         ).to_frame(index=False)
     )
     merged = skeleton.merge(df_in, on=["Schools", "Metric", "Fiscal Year"], how="left")
-    merged["Value"] = pd.to_numeric(merged["Value"], errors="coerce").fillna(0)
+    merged["Value_orig"] = pd.to_numeric(merged["Value"], errors="coerce")
+    # For display text:
+    merged["ValueText"] = merged["Value_orig"].fillna(0)
+    # For plotting:
+    merged["Value"] = merged["Value_orig"].fillna(0)
+    merged.loc[merged["Value"] == 0, "Value"] = eps  # tiny visible bar so year & label show
     return merged
 
-def pad_years_predicted(df_in, metrics, years, types=("Actual", "Forecast (Frozen)")):
+def pad_years_predicted(df_in, metrics, years, types=("Actual", "Forecast (Frozen)"), eps=1e-4):
     """
     Ensure all FYs in 'years' exist for every (Metric, Type) combination.
-    Fill missing with Value=0 so categories render on x-axis.
+    If missing, plot eps & display text '0'.
     """
     if not metrics:
         return df_in
@@ -157,7 +163,10 @@ def pad_years_predicted(df_in, metrics, years, types=("Actual", "Forecast (Froze
         ).to_frame(index=False)
     )
     merged = skeleton.merge(df_in, on=["Metric", "Type", "FY"], how="left")
-    merged["Value"] = pd.to_numeric(merged["Value"], errors="coerce").fillna(0)
+    merged["Value_orig"] = pd.to_numeric(merged["Value"], errors="coerce")
+    merged["ValueText"] = merged["Value_orig"].fillna(0)
+    merged["Value"] = merged["Value_orig"].fillna(0)
+    merged.loc[merged["Value"] == 0, "Value"] = eps
     return merged
 
 # =========================
@@ -506,7 +515,7 @@ if metric_group == "CSAF Predicted":
     else:
         frozen_pred = st.session_state["forecast_store"][forecast_key].copy()
 
-    # ✅ FIX: Correct column selection (no stray comma in 'Quarter')
+    # Corrected column selection
     combined = pd.concat(
         [actual_series[["Quarter", "Value", "Type"]], frozen_pred[["Quarter", "Value", "Type"]]],
         ignore_index=True
@@ -519,11 +528,11 @@ if metric_group == "CSAF Predicted":
         title=f"{selected_school} — {selected_metric} (Actual vs Frozen Forecast)"
     )
     if selected_metric == "FB Ratio":
-        fig.update_traces(texttemplate="%{y:.1%}", textposition="outside")
+        fig.update_traces(texttemplate="%{y:.1%}")
     elif selected_metric in ("Liabilities to Assets", "Current Ratio"):
-        fig.update_traces(texttemplate="%{y:.2f}", textposition="outside")
+        fig.update_traces(texttemplate="%{y:.2f}")
     else:
-        fig.update_traces(texttemplate="%{y:,.0f}", textposition="outside")
+        fig.update_traces(texttemplate="%{y:,.0f}")
 
     metric_label, formula_txt, threshold, best_label = csaf_formulas[selected_metric]
     if "≥" in best_label:
@@ -533,39 +542,33 @@ if metric_group == "CSAF Predicted":
         fig.add_hline(y=threshold, line_dash="dot", line_color="red",
                       annotation_text=f"Best Practice {best_label}", annotation_position="top left")
 
-    fig.update_xaxes(tickangle=45)
-    fig.update_layout(
-        height=BASE_HEIGHT_TALL,
-        legend_title="Series",
-        bargap=0.08, bargroupgap=0.04,
-        font=dict(size=BASE_FONT_SIZE),
-        legend_font=dict(size=BASE_FONT_SIZE),
-    )
-    fig.update_traces(textfont_size=BASE_TEXT_FONT_SIZE)
+    fig.update_xaxes(tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
+    fig = thicken_and_enlarge(fig, height=BASE_HEIGHT_TALL)
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
 # BUDGET TO ENROLLMENT (COMPARISON) — BAR ONLY
-# — Enforce FY22 → FY26 and pad missing years
+# — Enforce FY22 → FY26 and pad missing years with EPS bars + "0" labels
 # =========================
 elif metric_group == "Budget to Enrollment":
     selected_schools = st.sidebar.multiselect("Select School(s):", school_options_budget)
     if st.sidebar.checkbox("Select All Budget Schools"):
         selected_schools = school_options_budget
 
-    metrics_list = ["Budgettted", "Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]  # keep for consistency if typos occur
     metrics_list = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     metrics_list = [m for m in metrics_list if m in df_budget_long["Metric"].unique()]
     selected_metrics = st.sidebar.multiselect("Select Metrics:", metrics_list, default=metrics_list)
 
-    # Filter for selections, then clamp/pad to FY22–FY26
+    # Filter for selected schools/metrics, then clamp & pad to FY22–FY26
     df_f = df_budget_long[
         (df_budget_long["Schools"].isin(selected_schools)) &
         (df_budget_long["Metric"].isin(selected_metrics))
     ].copy()
-    # Only keep FY22–FY26 (we will pad to show missing)
+
+    # Keep only FY22–FY26 (we'll pad missing)
     df_f = df_f[df_f["Fiscal Year"].apply(lambda s: fy_in_range(s, START_FY, END_ACTUAL_FY))]
-    # Pad
+
+    # Pad — ensures FY22 appears with visible EPS bar and "0" text if missing
     df_f = pad_years_actual(df_f, selected_schools, selected_metrics, FY22_TO_FY26)
 
     if df_f.empty:
@@ -579,46 +582,35 @@ elif metric_group == "Budget to Enrollment":
 
     title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)} (FY22–FY26)"
 
+    # Use Value for bars; set `text` from ValueText to show exact values (including "0")
+    df_f["TextLabel"] = df_f["ValueText"].apply(lambda v: f"{v:,.0f}")
+
     fig = px.bar(
         df_f, x="Fiscal Year", y="Value",
         color="Metric",
         color_discrete_map=budget_metric_color_map,
         barmode="group",
-        text="Value",
+        text="TextLabel",
         facet_col="Schools", facet_col_wrap=2,
         title=title
     )
 
-    # Formatting for labels
+    # Formatting per metric
     for tr in fig.data:
         name = tr.name
         if name == "Budget to Enrollment Ratio":
-            subset = pd.to_numeric(df_f[df_f["Metric"] == name]["Value"], errors="coerce")
-            if not subset.empty and subset.max() <= 1.2:
-                tr.texttemplate = "%{text:.0%}"
-            else:
-                tr.texttemplate = "%{text:,.2f}"
-        elif name in {"Budgetted", "October 1 Count", "February 1 Count"}:
-            tr.texttemplate = "%{text:,.0f}"
+            # Determine if % formatting is appropriate
+            tr.texttemplate = "%{text}"  # we already formatted in TextLabel if needed
         else:
             tr.texttemplate = "%{text}"
 
-    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
     fig.update_xaxes(categoryorder="array", categoryarray=fy_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
-    fig.update_layout(
-        height=BASE_HEIGHT_TALLER,
-        legend_title="Metric",
-        title_x=0.5,
-        bargap=0.06, bargroupgap=0.03,
-        font=dict(size=BASE_FONT_SIZE),
-        legend_font=dict(size=BASE_FONT_SIZE),
-        margin=dict(t=80, b=80)
-    )
+    fig = thicken_and_enlarge(fig, height=BASE_HEIGHT_TALLER)
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# BUDGET TO ENROLLMENT PREDICTED — SINGLE ROW (NO FACET), FY22–FY28
-# — Actuals FY22–FY26; Forecast extends to FY28; pad all years
+# BUDGET TO ENROLLMENT PREDICTED — SINGLE LINE, FY22–FY28
+# — Actuals FY22–FY26; Forecast extends to FY28; pad missing years with EPS bars + "0" labels
 # =========================
 elif metric_group == "Budget to Enrollment Predicted":
     st.markdown("## 🔮 Budget to Enrollment Predicted (Actuals FY22–FY26 → Forecast to FY28)")
@@ -638,14 +630,10 @@ elif metric_group == "Budget to Enrollment Predicted":
     fiscal_years_b = sorted(df_budget_long["Fiscal Year"].dropna().astype(str).unique(), key=sort_fy_only)
     fy22_26_hist = [fy for fy in fiscal_years_b if fy_in_range(fy, START_FY, END_ACTUAL_FY)]
     if not fy22_26_hist:
-        # fallback to the fixed range in case dataset doesn't list them
         fy22_26_hist = FY22_TO_FY26
-    default_origin = fy_label(END_ACTUAL_FY)
-    if default_origin in fy22_26_hist:
-        default_origin_idx = fy22_26_hist.index(default_origin)
-    else:
-        default_origin_idx = max(0, len(fy22_26_hist) - 1)
 
+    default_origin = fy_label(END_ACTUAL_FY)
+    default_origin_idx = fy22_26_hist.index(default_origin) if default_origin in fy22_26_hist else max(0, len(fy22_26_hist) - 1)
     selected_fy_hist_b = st.sidebar.multiselect("📅 History Fiscal Years (training):", fy22_26_hist, default=fy22_26_hist)
     train_through_b = st.sidebar.selectbox("🧊 Forecast Origin (freeze at):", fy22_26_hist, index=default_origin_idx)
 
@@ -733,8 +721,7 @@ elif metric_group == "Budget to Enrollment Predicted":
 
         frozen_frames.append(st.session_state["forecast_store_budget_multi"][key].copy())
 
-    if not frozen_frames:
-        st.warning("⚠️ Not enough data to forecast the selected metric(s). Need at least 3 points per metric within FY22–FY26.")
+    # Combine forecast frames (some metrics might not have enough data)
     frozen_all = pd.concat(frozen_frames, ignore_index=True) if frozen_frames else pd.DataFrame(columns=["FY","Value","Metric","Type"])
 
     # Actuals: only FY22–FY26
@@ -748,20 +735,21 @@ elif metric_group == "Budget to Enrollment Predicted":
 
     combined = pd.concat([actual_now, frozen_all], ignore_index=True)
 
-    # ✅ Pad to guarantee FY22..FY28 appears on x-axis (single line)
+    # Pad to guarantee FY22..FY28 appears; use EPS bars for missing and show text "0"
     combined = pad_years_predicted(combined, selected_metrics_b, FY22_TO_FY28, types=("Actual", "Forecast (Frozen)"))
+    combined["TextLabel"] = combined["ValueText"].apply(lambda v: f"{v:,.0f}" if isinstance(v, (int, float)) else str(v))
 
     # Order FY22..FY28 on x-axis
     combined["sort_key"] = combined["FY"].apply(sort_fy_only)
     combined = combined.sort_values(["sort_key", "Metric", "Type"]).drop(columns="sort_key")
     fy_order = FY22_TO_FY28
 
-    # Single-line bar chart; color by Metric, hatch pattern by Type (Actual vs Forecast)
+    # Single-line grouped bars; color by Metric, hatch by Type
     fig = px.bar(
         combined,
         x="FY", y="Value",
         color="Metric",
-        text="Value",
+        text="TextLabel",
         pattern_shape="Type",
         pattern_shape_map={"Actual": "", "Forecast (Frozen)": "/"},
         color_discrete_map=budget_metric_color_map,
@@ -769,24 +757,9 @@ elif metric_group == "Budget to Enrollment Predicted":
         title=f"{selected_school_b} — Budget Metrics (Actual FY22–FY26 + Forecast to FY28)"
     )
 
-    for tr in fig.data:
-        met = tr.name
-        if met == "Budget to Enrollment Ratio":
-            tr.texttemplate = "%{text:.0%}"
-        else:
-            tr.texttemplate = "%{text:,.0f}"
-
-    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
+    fig.update_traces(texttemplate="%{text}")
     fig.update_xaxes(categoryorder="array", categoryarray=fy_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
-    fig.update_layout(
-        height=BASE_HEIGHT_TALLER,
-        legend_title="Metric / Type (pattern)",
-        title_x=0.5,
-        bargap=0.06, bargroupgap=0.03,
-        font=dict(size=BASE_FONT_SIZE),
-        legend_font=dict(size=BASE_FONT_SIZE),
-        margin=dict(t=80, b=80)
-    )
+    fig = thicken_and_enlarge(fig, height=BASE_HEIGHT_TALLER)
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
@@ -837,40 +810,38 @@ else:
     elif len(selected_metrics) > 1:
         facet_args = {"facet_col": "Metric", "facet_col_wrap": 2}
 
+    # Prepare text labels formatting
+    filtered["TextLabel"] = filtered["Value"]
+    if selected_metrics and all(m in dollar_metrics for m in selected_metrics):
+        # money
+        filtered["TextLabel"] = pd.to_numeric(filtered["TextLabel"], errors="coerce").apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "")
+    elif selected_metrics == ["FB Ratio"]:
+        filtered["TextLabel"] = pd.to_numeric(filtered["TextLabel"], errors="coerce").apply(lambda v: f"{v:.0%}" if pd.notna(v) else "")
+    elif selected_metrics == ["Liabilities to Assets"] or selected_metrics == ["Current Ratio"]:
+        filtered["TextLabel"] = pd.to_numeric(filtered["TextLabel"], errors="coerce").apply(lambda v: f"{v:.2f}" if pd.notna(v) else "")
+    elif selected_metrics == ["Unrestricted Days COH"]:
+        filtered["TextLabel"] = pd.to_numeric(filtered["TextLabel"], errors="coerce").apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "")
+    else:
+        filtered["TextLabel"] = pd.to_numeric(filtered["TextLabel"], errors="coerce").apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "")
+
     fig = px.bar(
         filtered, x="Fiscal Year", y="Value",
         color="FY Group", color_discrete_map=fy_color_map,
-        barmode="group", text="Value", title=chart_title, **facet_args
+        barmode="group", text="TextLabel", title=chart_title, **facet_args
     )
 
     fiscal_order = filtered["Fiscal Year"].unique().tolist()
     fig.update_xaxes(categoryorder="array", categoryarray=fiscal_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
-    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
 
-    if selected_metrics and all(m in dollar_metrics for m in selected_metrics):
-        fig.update_layout(yaxis_tickprefix="$", yaxis_tickformat=",")
-        fig.update_traces(texttemplate="$%{text:,.0f}")
-    elif selected_metrics == ["FB Ratio"]:
-        fig.update_traces(texttemplate="%{text:.0%}")
-        fig.update_layout(yaxis_tickformat=".0%")
+    # Add CSAF thresholds when single metric
+    if selected_metrics == ["FB Ratio"]:
         fig.add_hline(y=csaf_descriptions["FB Ratio"]["threshold"], line_dash="dot", line_color="blue")
     elif selected_metrics == ["Liabilities to Assets"]:
-        fig.update_traces(texttemplate="%{text:.2f}")
         fig.add_hline(y=csaf_descriptions["Liabilities to Assets"]["threshold"], line_dash="dot", line_color="blue")
     elif selected_metrics == ["Current Ratio"]:
-        fig.update_traces(texttemplate="%{text:.2f}")
         fig.add_hline(y=csaf_descriptions["Current Ratio"]["threshold"], line_dash="dot", line_color="blue")
     elif selected_metrics == ["Unrestricted Days COH"]:
-        fig.update_traces(texttemplate="%{text:,.0f}")
         fig.add_hline(y=csaf_descriptions["Unrestricted Days COH"]["threshold"], line_dash="dot", line_color="blue")
-    else:
-        fig.update_traces(texttemplate="%{text:,.0f}")
 
-    fig.update_layout(
-        height=BASE_HEIGHT_TALL,
-        bargap=0.08, bargroupgap=0.04,
-        font=dict(size=BASE_FONT_SIZE),
-        legend_font=dict(size=BASE_FONT_SIZE),
-        margin=dict(t=70, b=70),
-    )
+    fig = thicken_and_enlarge(fig, height=BASE_HEIGHT_TALL)
     st.plotly_chart(fig, use_container_width=True)
