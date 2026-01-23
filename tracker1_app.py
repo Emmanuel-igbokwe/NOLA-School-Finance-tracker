@@ -153,17 +153,75 @@ other_metrics = sorted([m for m in df_long["Metric"].dropna().unique() if m not 
 fy_color_map = {"FY22": "purple", "FY23": "red", "FY24": "blue", "FY25": "green", "FY26": "orange"}
 
 # =========================
-# Load FY26 Budget-to-Enrollment
+# Load FY26 Budget-to-Enrollment (ROBUST)
 # =========================
-fy26_path = "Enrollment FY26.xlsx"  # File in repo root
+fy26_path = "Enrollment FY26.xlsx"
+
+def normalize_col(c):
+    return re.sub(r"\s+", " ", str(c).strip()).lower()
+
 try:
-    df_budget_raw = pd.read_excel(fy26_path, sheet_name="FY26 Student enrollment", header=1)
+    # Try a few possible header rows (your file might not be header=1)
+    df_budget_raw = None
+    for hdr in [0, 1, 2, 3, 4]:
+        tmp = pd.read_excel(fy26_path, sheet_name="FY26 Student enrollment", header=hdr)
+        tmp.columns = [str(c).strip() for c in tmp.columns]
+        cols_norm = [normalize_col(c) for c in tmp.columns]
+
+        # If we can find some "school" + "fiscal year" like columns, accept this header
+        if any("school" in c for c in cols_norm) and any(("fiscal" in c and "year" in c) or c in ["fy", "fiscal year"] for c in cols_norm):
+            df_budget_raw = tmp
+            break
+
+    if df_budget_raw is None:
+        # Fall back to header=1 but print columns so you can see what's wrong
+        df_budget_raw = pd.read_excel(fy26_path, sheet_name="FY26 Student enrollment", header=1)
+
     df_budget_raw.columns = df_budget_raw.columns.str.strip()
+
+    # --- Rename common variations to your expected names ---
+    rename_map = {}
+    for c in df_budget_raw.columns:
+        cn = normalize_col(c)
+
+        if cn in ["school", "schools", "site", "campus"] or "school" in cn:
+            rename_map[c] = "Schools"
+
+        if cn in ["fy", "fiscal year", "fiscal_year"] or ("fiscal" in cn and "year" in cn):
+            rename_map[c] = "Fiscal Year"
+
+        if "budget" in cn and "enroll" not in cn:
+            rename_map[c] = "Budgetted"
+
+        if "oct" in cn and ("count" in cn or "enroll" in cn):
+            rename_map[c] = "October 1 Count"
+
+        if "variance" in cn and "%" not in cn:
+            rename_map[c] = "Variance"
+
+        if "%" in cn and "variance" in cn:
+            rename_map[c] = "%Variance"
+
+        if "budget" in cn and ("enrollment" in cn or "enrol" in cn) and ("ratio" in cn or "%" in cn):
+            rename_map[c] = "Budget to Enrollment Ratio"
+
+    df_budget_raw.rename(columns=rename_map, inplace=True)
+
+    # Optional: drop CMO if present
     if "CMO" in df_budget_raw.columns:
         df_budget_raw.drop(columns=["CMO"], inplace=True)
 
+    # ✅ If still missing, show what columns exist (so you can fix the Excel or mapping)
+    required = ["Schools", "Fiscal Year"]
+    missing = [c for c in required if c not in df_budget_raw.columns]
+    if missing:
+        st.error(f"FY26 sheet loaded, but missing columns: {missing}")
+        st.write("Columns found:", list(df_budget_raw.columns))
+        st.stop()
+
     expected_cols = ["Schools", "Fiscal Year", "Budgetted", "October 1 Count",
                      "Variance", "%Variance", "Budget to Enrollment Ratio"]
+
     df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"])
 
     df_budget_long = df_budget_raw.melt(
@@ -728,4 +786,5 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
