@@ -78,7 +78,15 @@ def sort_fy(x):
         return (year, q)
     except:
         return (999, 9)
-
+ def sort_fy_only(x):
+    """
+    Sort fiscal years like FY22, FY23, FY24 correctly
+    (used for Budget-to-Enrollment which has no quarters)
+    """
+    try:
+        return int(str(x).replace("FY", "").strip())
+    except:
+        return 999
 def load_excel_safe(path_candidates, **read_kwargs):
     for p in path_candidates:
         try:
@@ -602,7 +610,7 @@ elif metric_group == "Budget to Enrollment":
         st.warning("⚠️ No Budget to Enrollment data matches your filters.")
         st.stop()
 
-    df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy)
+    df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
     df_f = df_f.sort_values("sort_key")
 
     title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)}"
@@ -816,6 +824,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
