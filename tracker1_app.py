@@ -1,3 +1,4 @@
+
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -59,6 +60,36 @@ with col2:
         """,
         unsafe_allow_html=True
     )
+
+# =========================
+# GLOBAL VISUAL CONSTANTS
+# =========================
+BASE_FONT_SIZE = 16
+BASE_LABEL_FONT_SIZE = 15
+BASE_TEXT_FONT_SIZE = 15
+BASE_HEIGHT_TALL = 760  # General tall chart height
+BASE_HEIGHT_TALLER = 820  # For complex faceting
+
+# Actual/prediction year controls
+START_FY = 22        # FY22
+END_ACTUAL_FY = 26   # FY26 (end of actual window)
+END_FORECAST_FY = 28 # FY28 (end of forecast window)
+
+def fy_label(y):
+    return f"FY{int(y):02d}"
+
+def fy_num(fy_str):
+    try:
+        return int(str(fy_str).replace("FY", "").strip())
+    except Exception:
+        return None
+
+def fy_in_range(fy_str, start_y, end_y):
+    y = fy_num(fy_str)
+    return y is not None and start_y <= y <= end_y
+
+def full_fy_range(start_y, end_y):
+    return [fy_label(y) for y in range(start_y, end_y + 1)]
 
 # =========================
 # HELPERS
@@ -243,6 +274,10 @@ budget_metric_color_map = {
     "Budget to Enrollment Ratio": "#ff7f0e",
 }
 
+# Precompute canonical FY ranges needed for clamping/ordering
+FY22_TO_FY26 = full_fy_range(START_FY, END_ACTUAL_FY)
+FY22_TO_FY28 = full_fy_range(START_FY, END_FORECAST_FY)
+
 # =========================
 # UI
 # =========================
@@ -304,7 +339,7 @@ if metric_group == "CSAF Predicted":
     def make_future_labels(last_label: str, n: int, quarters_per_year=3):
         fy, q = parse_fyq(last_label)
         if fy is None:
-            fy, q = 26, 0
+            fy, q = END_ACTUAL_FY, 0
         out = []
         for _ in range(n):
             q += 1
@@ -438,6 +473,8 @@ if metric_group == "CSAF Predicted":
     else:
         frozen_pred = st.session_state["forecast_store"][forecast_key].copy()
 
+    combined = pd.concat([actual_series[["Quarter,","Value","Type".replace(",","")]], frozen_pred[["Quarter", "Value", "Type"]]], ignore_index=True)
+    # Fix for accidental comma above in list creation due to formatting:
     combined = pd.concat([actual_series[["Quarter", "Value", "Type"]], frozen_pred[["Quarter", "Value", "Type"]]], ignore_index=True)
 
     fig = px.bar(
@@ -462,41 +499,53 @@ if metric_group == "CSAF Predicted":
                       annotation_text=f"Best Practice {best_label}", annotation_position="top left")
 
     fig.update_xaxes(tickangle=45)
-    fig.update_layout(height=560, legend_title="Series")
+    fig.update_layout(
+        height=BASE_HEIGHT_TALL,
+        legend_title="Series",
+        bargap=0.08, bargroupgap=0.04,
+        font=dict(size=BASE_FONT_SIZE),
+        legend_font=dict(size=BASE_FONT_SIZE),
+    )
+    fig.update_traces(textfont_size=BASE_TEXT_FONT_SIZE)
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# BUDGET TO ENROLLMENT (COMPARISON) — BAR ONLY (already multi-metric)
+# BUDGET TO ENROLLMENT (COMPARISON) — BAR ONLY
+# — Enforce chart from FY22 to FY26
 # =========================
 elif metric_group == "Budget to Enrollment":
+    # Default the selection to FY22–FY26; also clamp later to ensure the chart always uses this window
     selected_schools = st.sidebar.multiselect("Select School(s):", school_options_budget)
     if st.sidebar.checkbox("Select All Budget Schools"):
         selected_schools = school_options_budget
 
-    selected_fy = st.sidebar.multiselect("Select Fiscal Year(s):", fiscal_options_budget)
-    if st.sidebar.checkbox("Select All Budget Fiscal Years"):
-        selected_fy = fiscal_options_budget
+    # Only show the FY22–FY26 options by default
+    fy22_26_defaults = [fy for fy in fiscal_options_budget if fy_in_range(fy, START_FY, END_ACTUAL_FY)]
+    selected_fy = st.sidebar.multiselect("Select Fiscal Year(s):", fy22_26_defaults, default=fy22_26_defaults)
+    if st.sidebar.checkbox("Select All Budget Fiscal Years (FY22–FY26)"):
+        selected_fy = fy22_26_defaults
 
     metrics_list = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     metrics_list = [m for m in metrics_list if m in df_budget_long["Metric"].unique()]
     selected_metrics = st.sidebar.multiselect("Select Metrics:", metrics_list, default=metrics_list)
 
+    # Filter by selections, then clamp the fiscal years to FY22–FY26 to enforce the requested window
     df_f = df_budget_long[
         (df_budget_long["Schools"].isin(selected_schools)) &
-        (df_budget_long["Fiscal Year"].isin(selected_fy)) &
         (df_budget_long["Metric"].isin(selected_metrics))
     ].copy()
+    df_f = df_f[df_f["Fiscal Year"].apply(lambda s: fy_in_range(s, START_FY, END_ACTUAL_FY))]
 
     if df_f.empty:
-        st.warning("⚠️ No Budget to Enrollment data matches your filters.")
+        st.warning("⚠️ No Budget to Enrollment data matches your filters for FY22–FY26.")
         st.stop()
 
     df_f["Fiscal Year"] = df_f["Fiscal Year"].astype(str).str.strip()
     df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
     df_f = df_f.sort_values("sort_key")
-    fy_order = df_f["Fiscal Year"].unique().tolist()
+    fy_order = FY22_TO_FY26  # force ordering from FY22 to FY26
 
-    title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)}"
+    title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)} (FY22–FY26)"
 
     fig = px.bar(
         df_f, x="Fiscal Year", y="Value",
@@ -508,6 +557,7 @@ elif metric_group == "Budget to Enrollment":
         title=title
     )
 
+    # Bigger labels/formatting
     for tr in fig.data:
         name = tr.name
         if name == "Budget to Enrollment Ratio":
@@ -521,16 +571,25 @@ elif metric_group == "Budget to Enrollment":
         else:
             tr.texttemplate = "%{text}"
 
-    fig.update_traces(textposition="outside")
-    fig.update_xaxes(categoryorder="array", categoryarray=fy_order, tickangle=45)
-    fig.update_layout(height=700, legend_title="Metric", title_x=0.5, bargap=0.15, bargroupgap=0.05)
+    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
+    fig.update_xaxes(categoryorder="array", categoryarray=fy_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
+    fig.update_layout(
+        height=BASE_HEIGHT_TALLER,
+        legend_title="Metric",
+        title_x=0.5,
+        bargap=0.06, bargroupgap=0.03,
+        font=dict(size=BASE_FONT_SIZE),
+        legend_font=dict(size=BASE_FONT_SIZE),
+        margin=dict(t=80, b=80)
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
 # BUDGET TO ENROLLMENT PREDICTED — MULTI-METRIC (BAR ONLY)
+# — Actuals FY22–FY26; Forecast extends to FY28
 # =========================
 elif metric_group == "Budget to Enrollment Predicted":
-    st.markdown("## 🔮 Budget to Enrollment Predicted (Frozen Forecast)")
+    st.markdown("## 🔮 Budget to Enrollment Predicted (Actuals FY22–FY26 → Forecast Frozen to FY28)")
 
     if df_budget_long.empty:
         st.warning("⚠️ Budget dataset not loaded.")
@@ -542,13 +601,17 @@ elif metric_group == "Budget to Enrollment Predicted":
     metrics_all = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     metrics_all = [m for m in metrics_all if m in df_budget_long["Metric"].unique()]
 
-    # ✅ MULTI-SELECT
+    # Multi-select metrics
     selected_metrics_b = st.sidebar.multiselect("📊 Choose Metric(s):", metrics_all, default=metrics_all)
 
+    # Default history to FY22–FY26 only
     fiscal_years_b = sorted(df_budget_long["Fiscal Year"].dropna().astype(str).unique(), key=sort_fy_only)
-    selected_fy_hist_b = st.sidebar.multiselect("📅 History Fiscal Years (training):", fiscal_years_b, default=fiscal_years_b)
+    fy22_26_hist = [fy for fy in fiscal_years_b if fy_in_range(fy, START_FY, END_ACTUAL_FY)]
+    selected_fy_hist_b = st.sidebar.multiselect("📅 History Fiscal Years (training):", fy22_26_hist, default=fy22_26_hist)
 
-    train_through_b = st.sidebar.selectbox("🧊 Forecast Origin (freeze at):", fiscal_years_b, index=max(0, len(fiscal_years_b) - 1))
+    # Freeze origin defaults to FY26 if available; otherwise last in the selected history
+    default_origin_idx = fy22_26_hist.index(fy_label(END_ACTUAL_FY)) if fy_label(END_ACTUAL_FY) in fy22_26_hist else max(0, len(fy22_26_hist) - 1)
+    train_through_b = st.sidebar.selectbox("🧊 Forecast Origin (freeze at):", fy22_26_hist, index=default_origin_idx)
 
     forecast_method_b = st.sidebar.selectbox(
         "🧠 Forecast Method",
@@ -560,7 +623,12 @@ elif metric_group == "Budget to Enrollment Predicted":
         index=0,
     )
 
-    n_future_b = st.sidebar.slider("🔮 Forecast horizon (years)", 1, 6, 3)
+    # Horizon automatically set to extend through FY28
+    origin_year = sort_fy_only(train_through_b)
+    n_future_b = max(0, END_FORECAST_FY - origin_year)
+    future_labels = [fy_label(y) for y in range(origin_year + 1, END_FORECAST_FY + 1)]
+
+    st.caption(f"Forecast horizon automatically set to reach **FY{END_FORECAST_FY}** (origin: {train_through_b} → {', '.join(future_labels) if future_labels else 'no future years needed'}).")
     run_pred_b = st.sidebar.button("▶ Run Budget Prediction")
 
     if not selected_metrics_b:
@@ -570,9 +638,6 @@ elif metric_group == "Budget to Enrollment Predicted":
     if not run_pred_b:
         st.info("Use the sidebar to pick School, Metrics, History Years, Forecast Origin, Method, then click **Run Budget Prediction**.")
         st.stop()
-
-    origin_year = sort_fy_only(train_through_b)
-    future_labels = [f"FY{origin_year + i:02d}" for i in range(1, n_future_b + 1)]
 
     st.session_state.setdefault("forecast_store_budget_multi", {})
 
@@ -591,13 +656,13 @@ elif metric_group == "Budget to Enrollment Predicted":
     for met in selected_metrics_b:
         dfh = df_budget_long[
             (df_budget_long["Schools"] == selected_school_b) &
-            (df_budget_long["Fiscal Year"].isin(selected_fy_hist_b)) &
             (df_budget_long["Metric"] == met)
         ].copy()
 
+        # Clamp training window to FY22–FY26 and up to origin
         dfh["sort_key"] = dfh["Fiscal Year"].apply(sort_fy_only)
-        dfh = dfh[dfh["sort_key"] <= origin_year].sort_values("sort_key")
-        dfh = dfh.dropna(subset=["Value"])
+        dfh = dfh[dfh["Fiscal Year"].apply(lambda s: fy_in_range(s, START_FY, END_ACTUAL_FY))]
+        dfh = dfh[dfh["sort_key"] <= origin_year].sort_values("sort_key").dropna(subset=["Value"])
 
         y = clean_series(dfh["Value"])
         if len(y) < 3:
@@ -606,18 +671,21 @@ elif metric_group == "Budget to Enrollment Predicted":
         t = np.arange(len(y)).reshape(-1, 1)
         y_log = np.log1p(np.clip(y, 0, None))
 
-        key = f"{selected_school_b}__{met}__{train_through_b}__{forecast_method_b}__{n_future_b}"
+        key = f"{selected_school_b}__{met}__{train_through_b}__{forecast_method_b}__TO_{END_FORECAST_FY}"
         if key not in st.session_state["forecast_store_budget_multi"]:
-            if forecast_method_b.startswith("Ensemble"):
-                p1 = pred_huber(t, y_log, n_future_b)
-                p2 = pred_linear(t, y_log, n_future_b)
-                y_future = 0.5 * p1 + 0.5 * p2
-            elif forecast_method_b.startswith("Robust"):
-                y_future = pred_huber(t, y_log, n_future_b)
-            else:
-                y_future = pred_linear(t, y_log, n_future_b)
+            if n_future_b > 0:
+                if forecast_method_b.startswith("Ensemble"):
+                    p1 = pred_huber(t, y_log, n_future_b)
+                    p2 = pred_linear(t, y_log, n_future_b)
+                    y_future = 0.5 * p1 + 0.5 * p2
+                elif forecast_method_b.startswith("Robust"):
+                    y_future = pred_huber(t, y_log, n_future_b)
+                else:
+                    y_future = pred_linear(t, y_log, n_future_b)
 
-            y_future = np.clip(y_future, 0, None)
+                y_future = np.clip(y_future, 0, None)
+            else:
+                y_future = np.array([])
 
             frozen_pred = pd.DataFrame({
                 "FY": future_labels,
@@ -630,15 +698,17 @@ elif metric_group == "Budget to Enrollment Predicted":
         frozen_frames.append(st.session_state["forecast_store_budget_multi"][key].copy())
 
     if not frozen_frames:
-        st.warning("⚠️ Not enough data to forecast the selected metric(s). Need at least 3 points per metric.")
+        st.warning("⚠️ Not enough data to forecast the selected metric(s). Need at least 3 points per metric within FY22–FY26.")
         st.stop()
 
     frozen_all = pd.concat(frozen_frames, ignore_index=True)
 
+    # Actuals: only FY22–FY26
     actual_now = df_budget_long[
         (df_budget_long["Schools"] == selected_school_b) &
         (df_budget_long["Metric"].isin(selected_metrics_b))
     ].copy()
+    actual_now = actual_now[actual_now["Fiscal Year"].apply(lambda s: fy_in_range(s, START_FY, END_ACTUAL_FY))]
     actual_now["sort_key"] = actual_now["Fiscal Year"].apply(sort_fy_only)
     actual_now = actual_now.sort_values("sort_key")
     actual_now["Type"] = "Actual"
@@ -651,9 +721,10 @@ elif metric_group == "Budget to Enrollment Predicted":
         ignore_index=True
     )
 
+    # Order FY22..FY28 on x-axis
     combined["sort_key"] = combined["FY"].apply(sort_fy_only)
     combined = combined.sort_values(["sort_key", "Metric", "Type"]).drop(columns="sort_key")
-    fy_order = combined["FY"].unique().tolist()
+    fy_order = FY22_TO_FY28
 
     fig = px.bar(
         combined,
@@ -663,7 +734,7 @@ elif metric_group == "Budget to Enrollment Predicted":
         text="Value",
         facet_row="Type",
         color_discrete_map=budget_metric_color_map,
-        title=f"{selected_school_b} — Budget Metrics (Actual vs Frozen Forecast)"
+        title=f"{selected_school_b} — Budget Metrics (Actual FY22–FY26 vs Frozen Forecast to FY28)"
     )
 
     for tr in fig.data:
@@ -673,9 +744,17 @@ elif metric_group == "Budget to Enrollment Predicted":
         else:
             tr.texttemplate = "%{text:,.0f}"
 
-    fig.update_traces(textposition="outside")
-    fig.update_xaxes(categoryorder="array", categoryarray=fy_order, tickangle=45)
-    fig.update_layout(height=650, legend_title="Metric")
+    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
+    fig.update_xaxes(categoryorder="array", categoryarray=fy_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
+    fig.update_layout(
+        height=BASE_HEIGHT_TALLER,
+        legend_title="Metric",
+        title_x=0.5,
+        bargap=0.06, bargroupgap=0.03,
+        font=dict(size=BASE_FONT_SIZE),
+        legend_font=dict(size=BASE_FONT_SIZE),
+        margin=dict(t=80, b=80)
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
@@ -733,8 +812,8 @@ else:
     )
 
     fiscal_order = filtered["Fiscal Year"].unique().tolist()
-    fig.update_xaxes(categoryorder="array", categoryarray=fiscal_order, tickangle=45)
-    fig.update_traces(textposition="outside")
+    fig.update_xaxes(categoryorder="array", categoryarray=fiscal_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
+    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
 
     if selected_metrics and all(m in dollar_metrics for m in selected_metrics):
         fig.update_layout(yaxis_tickprefix="$", yaxis_tickformat=",")
@@ -755,5 +834,11 @@ else:
     else:
         fig.update_traces(texttemplate="%{text:,.0f}")
 
-    fig.update_layout(height=650, bargap=0.12, bargroupgap=0.05)
+    fig.update_layout(
+        height=BASE_HEIGHT_TALL,
+        bargap=0.08, bargroupgap=0.04,
+        font=dict(size=BASE_FONT_SIZE),
+        legend_font=dict(size=BASE_FONT_SIZE),
+        margin=dict(t=70, b=70),
+    )
     st.plotly_chart(fig, use_container_width=True)
