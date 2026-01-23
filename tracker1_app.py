@@ -87,14 +87,6 @@ def sort_fy(x):
         return int(str(x).replace("FY", "").strip())
     except:
         return 999
-def load_excel_safe(path_candidates, **read_kwargs):
-    for p in path_candidates:
-        try:
-            if os.path.exists(p):
-                return pd.read_excel(p, engine="openpyxl", **read_kwargs)
-        except Exception:
-            pass
-    return None
 
 # =========================
 # Load FY25 Dataset
@@ -824,6 +816,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
