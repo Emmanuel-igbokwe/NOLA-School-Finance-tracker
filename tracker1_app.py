@@ -627,17 +627,18 @@ elif metric_group == "Budget to Enrollment":
             )
 
             for tr in fig.data:
-                name = tr.name
-                if name in percent_metrics_budget:
-                    subset = df_f[df_f["Metric"] == name]["Value"]
-                    if subset.max() <= 1.2:
-                        tr.texttemplate = "%{text:.0%}"
-                    else:
-                        tr.texttemplate = "%{text:,.2f}%"
-               elif name in {"Budgetted", "October 1 Count", "February 1 Count"}:
-                    tr.texttemplate = "%{text:,.0f}"
-                else: 
-                    tr.texttemplate = "%{text}"
+    name = tr.name
+    if name in percent_metrics_budget:
+        subset = df_f[df_f["Metric"] == name]["Value"]
+        if subset.max() <= 1.2:
+            tr.texttemplate = "%{text:.0%}"
+        else:
+            tr.texttemplate = "%{text:,.2f}%"
+    elif name in {"Budgetted", "October 1 Count", "February 1 Count"}:
+        tr.texttemplate = "%{text:,.0f}"
+    else:
+        tr.texttemplate = "%{text}"
+
             fig.update_traces(textposition="outside")
 
         fig.update_xaxes(tickangle=45)
@@ -795,6 +796,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
