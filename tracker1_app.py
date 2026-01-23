@@ -692,9 +692,6 @@ elif metric_group == "Budget to Enrollment":
     st.markdown("### 📋 Budget to Enrollment Data (By School)")
     st.dataframe(df_show, use_container_width=True)
 
-    else:
-        st.warning("⚠️ No Budget to Enrollment data matches your filters.")
-
 # =========================
 # FY25 (CSAF + Other) — unchanged visuals
 # =========================
@@ -819,6 +816,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
