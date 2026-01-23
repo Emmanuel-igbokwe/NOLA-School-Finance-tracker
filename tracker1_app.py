@@ -592,14 +592,16 @@ elif metric_group == "Budget to Enrollment":
         (df_budget_long["Metric"].isin(selected_metrics))
     ].copy()
 
-    if df_f.empty:
-        st.warning("⚠️ No Budget to Enrollment data matches your filters.")
-        st.stop()
+   if df_f.empty:
+    st.warning("⚠️ No Budget to Enrollment data matches your filters.")
+    st.stop()
 
-    df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
-    df_f = df_f.sort_values("sort_key")
+df_f["Fiscal Year"] = df_f["Fiscal Year"].astype(str).str.strip()
+df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
+df_f = df_f.sort_values("sort_key")
+fy_order = df_f["Fiscal Year"].unique().tolist()
 
-    title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)}"
+title = f"Budget to Enrollment Comparison — {', '.join(selected_metrics)}"
 
     # -------------------------
     # Charts
@@ -651,8 +653,10 @@ elif metric_group == "Budget to Enrollment":
 
             else:
                 tr.texttemplate = "%{text}"
-
         fig.update_traces(textposition="outside")
+
+    # ✅ Force FY order
+    fig.update_xaxes(categoryorder="array", categoryarray=fy_order)
 
     fig.update_xaxes(tickangle=45)
     fig.update_layout(
@@ -663,6 +667,7 @@ elif metric_group == "Budget to Enrollment":
         bargroupgap=0.05
     )
     st.plotly_chart(fig, use_container_width=True)
+      
 
     # -------------------------
     # Table formatting
@@ -810,6 +815,7 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
 
