@@ -202,8 +202,12 @@ try:
         if "%" in cn and "variance" in cn:
             rename_map[c] = "%Variance"
 
-        if "budget" in cn and ("enrollment" in cn or "enrol" in cn) and ("ratio" in cn or "%" in cn):
+        if "budget" in cn and ("enrollment" in cn or "enrol" in cn) and ("ratio" in cn or "%" in cn): 
             rename_map[c] = "Budget to Enrollment Ratio"
+            
+        if ("feb" in cn or "february" in cn) and ("count" in cn or "enroll" in cn):
+            rename_map[c] = "February 1 Count"
+
 
     df_budget_raw.rename(columns=rename_map, inplace=True)
 
@@ -218,9 +222,15 @@ try:
         st.error(f"FY26 sheet loaded, but missing columns: {missing}")
         st.write("Columns found:", list(df_budget_raw.columns))
         st.stop()
+        
+    expected_cols = [
+        "Schools", "Fiscal Year",
+        "Budgetted",
+        "October 1 Count",
+        "February 1 Count",
+        "Budget to Enrollment Ratio"
+    ]
 
-    expected_cols = ["Schools", "Fiscal Year", "Budgetted", "October 1 Count",
-                     "Variance", "%Variance", "Budget to Enrollment Ratio"]
 
     df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"])
 
@@ -243,11 +253,10 @@ except Exception as e:
 budget_metric_color_map = {
     "Budgetted": "#1f77b4",
     "October 1 Count": "#2ca02c",
-    "Variance": "#d62728",
-    "%Variance": "#9467bd",
+    "February 1 Count": "#d62728",
     "Budget to Enrollment Ratio": "#ff7f0e",
 }
-percent_metrics_budget = {"%Variance", "Budget to Enrollment Ratio"}
+percent_metrics_budget = { "Budget to Enrollment Ratio"}
 
 # =========================
 # UI
@@ -578,7 +587,7 @@ elif metric_group == "Budget to Enrollment":
     if st.sidebar.checkbox("Select All Budget Fiscal Years"):
         selected_fy = fiscal_options_budget
 
-    metrics_list = ["Budgetted", "October 1 Count", "Variance", "%Variance", "Budget to Enrollment Ratio"]
+    metrics_list = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     metrics_list = [m for m in metrics_list if m in df_budget_long["Metric"].unique()]
     selected_metrics = st.sidebar.multiselect("Select Metrics:", metrics_list)
 
@@ -625,9 +634,9 @@ elif metric_group == "Budget to Enrollment":
                         tr.texttemplate = "%{text:.0%}"
                     else:
                         tr.texttemplate = "%{text:,.2f}%"
-                elif name in {"Budgetted", "October 1 Count", "Variance"}:
+               elif name in {"Budgetted", "October 1 Count", "February 1 Count"}:
                     tr.texttemplate = "%{text:,.0f}"
-                else:
+                else: 
                     tr.texttemplate = "%{text}"
             fig.update_traces(textposition="outside")
 
@@ -786,5 +795,6 @@ else:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("⚠️ Welcome To Finance Accountability Real-Time Dashboard. Try Adjusting your Left filters.")
+
 
 
