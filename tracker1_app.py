@@ -15,23 +15,33 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 # =========================
-# PAGE CONFIG + COMPACT SIDEBAR UI
+# THEME / BACKGROUND (match your screenshot look)
 # =========================
+APP_BG = "#dfe7df"     # soft green/gray
+PLOT_BG = "#dfe7df"
+GRID_CLR = "rgba(0,0,0,0.12)"
+
 st.set_page_config(page_title="NOLA Financial Tracker", layout="wide")
 
 st.markdown(
-    """
+    f"""
     <style>
-    section[data-testid="stSidebar"] * { font-size: 13px !important; }
-    section[data-testid="stSidebar"] label { font-size: 13px !important; }
+    .stApp {{
+        background-color: {APP_BG};
+    }}
+    section[data-testid="stSidebar"] {{
+        background-color: {APP_BG};
+    }}
+    section[data-testid="stSidebar"] * {{ font-size: 13px !important; }}
+    section[data-testid="stSidebar"] label {{ font-size: 13px !important; }}
     section[data-testid="stSidebar"] .stSelectbox,
     section[data-testid="stSidebar"] .stMultiSelect,
     section[data-testid="stSidebar"] .stRadio,
     section[data-testid="stSidebar"] .stCheckbox,
-    section[data-testid="stSidebar"] .stSlider {
+    section[data-testid="stSidebar"] .stSlider {{
         margin-bottom: 0.40rem !important;
-    }
-    section[data-testid="stSidebar"] div[role="listbox"] div { font-size: 12px !important; }
+    }}
+    section[data-testid="stSidebar"] div[role="listbox"] div {{ font-size: 12px !important; }}
     </style>
     """,
     unsafe_allow_html=True
@@ -56,18 +66,18 @@ with col2:
     )
 
 # =========================
-# VISUAL CONSTANTS + YEAR RANGES
+# CONSTANTS
 # =========================
 BASE_FONT_SIZE = 18
 BASE_LABEL_FONT_SIZE = 16
 BASE_TEXT_FONT_SIZE = 16
-UNIFORM_TEXT_MIN = 14
-BASE_HEIGHT_TALL = 780
-BASE_HEIGHT_TALLER = 860
+BASE_HEIGHT_TALL = 880        # ⬅ bigger overall
+BASE_HEIGHT_TALLER = 980      # ⬅ bigger overall
+CSAF_PRED_HEIGHT = 980        # ⬅ bigger CSAF predicted bars
 
-START_FY = 22        # FY22
-END_ACTUAL_FY = 26   # FY26 (end of actuals)
-END_FORECAST_FY = 28 # FY28 (end of forecast)
+START_FY = 22
+END_ACTUAL_FY = 26
+END_FORECAST_FY = 28
 
 def fy_label(y: int) -> str:
     return f"FY{int(y):02d}"
@@ -107,21 +117,30 @@ def sort_fy_only(x):
 def full_fy_range(start_y, end_y):
     return [fy_label(y) for y in range(start_y, end_y + 1)]
 
-FY22_TO_FY26 = full_fy_range(START_FY, END_ACTUAL_FY)
 FY22_TO_FY28 = full_fy_range(START_FY, END_FORECAST_FY)
 
-def thicken_and_enlarge(fig, height=None):
+def std_fyq_label(x):
+    s = str(x).strip()
+    parts = s.split()
+    if not parts:
+        return s
+    parts[0] = fy_std(parts[0])
+    return " ".join(parts)
+
+def apply_plot_style(fig, height):
     fig.update_layout(
-        height=height or BASE_HEIGHT_TALL,
+        height=height,
         font=dict(size=BASE_FONT_SIZE),
         legend_font=dict(size=BASE_FONT_SIZE),
-        uniformtext_minsize=UNIFORM_TEXT_MIN,
-        uniformtext_mode="show",
-        margin=dict(t=70, b=90)
+        margin=dict(t=70, b=90),
+        paper_bgcolor=PLOT_BG,
+        plot_bgcolor=PLOT_BG,
     )
+    fig.update_xaxes(tickfont=dict(size=BASE_LABEL_FONT_SIZE), showgrid=False)
+    fig.update_yaxes(tickfont=dict(size=BASE_LABEL_FONT_SIZE), gridcolor=GRID_CLR)
     return fig
 
-def guard_growth(y_future, last_val, max_up=1.35, max_down=0.70, lower=0.0, upper=None):
+def guard_growth(y_future, last_val, max_up=1.25, max_down=0.75, lower=0.0, upper=None):
     out = []
     prev = float(last_val)
     for v in y_future:
@@ -137,7 +156,7 @@ def guard_growth(y_future, last_val, max_up=1.35, max_down=0.70, lower=0.0, uppe
     return np.array(out, dtype=float)
 
 # =========================
-# BEST PRACTICE / THRESHOLDS (CSAF ONLY)
+# CSAF BEST PRACTICES (ONLY CSAF)
 # =========================
 csaf_metrics = ["FB Ratio", "Liabilities to Assets", "Current Ratio", "Unrestricted Days COH"]
 csaf_descriptions = {
@@ -163,7 +182,7 @@ def add_best_practice_csaf(fig, metric):
     return fig
 
 # =========================
-# LOAD DATA (CSAF + OTHER)
+# LOAD DATA (FINANCIALS)
 # =========================
 fy25_path = "FY25.xlsx"
 try:
@@ -174,18 +193,7 @@ except Exception as e:
 
 df.columns = df.columns.str.strip()
 df = df.dropna(subset=["Schools", "Fiscal Year"])
-df["Fiscal Year"] = df["Fiscal Year"].astype(str).str.strip()
-
-# Standardize leading FY token in 'Fiscal Year' (keeps Q parts)
-def std_fyq_label(x):
-    s = str(x).strip()
-    parts = s.split()
-    if not parts:
-        return s
-    parts[0] = fy_std(parts[0])
-    return " ".join(parts)
-
-df["Fiscal Year"] = df["Fiscal Year"].apply(std_fyq_label)
+df["Fiscal Year"] = df["Fiscal Year"].astype(str).str.strip().apply(std_fyq_label)
 
 value_vars = [c for c in df.columns if c not in ["Schools", "Fiscal Year"]]
 df_long = df.melt(
@@ -212,7 +220,7 @@ other_metrics = sorted([m for m in df_long["Metric"].dropna().unique() if m not 
 fy_color_map = {"FY22": "purple", "FY23": "red", "FY24": "blue", "FY25": "green", "FY26": "orange"}
 
 # =========================
-# LOAD DATA (BUDGET TO ENROLLMENT)
+# LOAD DATA (BUDGET / ENROLLMENT)
 # =========================
 fy26_path = "Enrollment FY26.xlsx"
 try:
@@ -256,7 +264,6 @@ try:
 
     expected_cols = ["Schools", "Fiscal Year", "Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"]).copy()
-
     df_budget_raw["Fiscal Year"] = df_budget_raw["Fiscal Year"].astype(str).str.strip().apply(fy_std)
 
     df_budget_long = df_budget_raw.melt(
@@ -268,7 +275,6 @@ try:
 
     fiscal_options_budget = sorted(df_budget_long["Fiscal Year"].dropna().unique(), key=sort_fy_only)
     school_options_budget = sorted(df_budget_long["Schools"].dropna().unique())
-
 except Exception as e:
     st.warning(f"⚠️ Could not load '{fy26_path}' / sheet 'FY26 Student enrollment': {e}")
     df_budget_long = pd.DataFrame()
@@ -282,7 +288,7 @@ budget_metric_color_map = {
 }
 
 # =========================
-# UI — DASHBOARD SWITCHER
+# UI
 # =========================
 st.title("📊 NOLA Schools Financial Tracker")
 st.markdown("<p style='font-size:14px;color:gray;'>Built by Emmanuel Igbokwe</p>", unsafe_allow_html=True)
@@ -294,7 +300,91 @@ if not df_budget_long.empty:
 metric_group = st.sidebar.radio("Choose Dashboard:", modes)
 
 # =========================
-# CSAF PREDICTED (BAR)
+# MODEL UTILITIES (minimal error selection)
+# =========================
+def make_feats_quarters(q_idx):
+    # q_idx: 1..3
+    Q2 = (q_idx == 2).astype(int)
+    Q3 = (q_idx == 3).astype(int)
+    return np.column_stack([Q2, Q3])
+
+def ts_cv_mae(model, X, y, splits=3):
+    if len(y) < 5:
+        return np.inf
+    n_splits = min(splits, max(2, len(y) - 2))
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    maes = []
+    for tr, te in tscv.split(X):
+        model.fit(X[tr], y[tr])
+        pred = model.predict(X[te])
+        maes.append(mean_absolute_error(y[te], pred))
+    return float(np.mean(maes)) if maes else np.inf
+
+def best_model_forecast_yearly(y, n_future, is_ratio=False):
+    """
+    Yearly data forecaster (Budget/Enrollment): choose best model by time-series CV on log1p.
+    """
+    if len(y) == 0:
+        return np.zeros(n_future), "None", np.inf
+
+    y_clip = np.clip(y, 0, None)
+    if is_ratio:
+        y_clip = np.clip(y_clip, 0.0, 1.5)
+
+    y_log = np.log1p(y_clip)
+    t = np.arange(len(y_log)).reshape(-1, 1).astype(float)
+    X = np.hstack([t, t**2])
+
+    candidates = {
+        "Huber": HuberRegressor(),
+        "Linear": LinearRegression(),
+        "HGBR": HistGradientBoostingRegressor(max_depth=3, learning_rate=0.08, max_iter=600, random_state=42),
+        "MLP": make_pipeline(
+            StandardScaler(),
+            MLPRegressor(
+                hidden_layer_sizes=(16, 8),
+                activation="relu",
+                solver="adam",
+                max_iter=9000,
+                random_state=42,
+                learning_rate="adaptive",
+                early_stopping=True,
+                n_iter_no_change=120
+            )
+        )
+    }
+
+    scores = {}
+    for name, mdl in candidates.items():
+        try:
+            scores[name] = ts_cv_mae(mdl, X, y_log, splits=3)
+        except Exception:
+            scores[name] = np.inf
+
+    best_name = min(scores, key=scores.get)
+    best_mdl = candidates[best_name]
+    best_err = scores[best_name]
+
+    best_mdl.fit(X, y_log)
+    tf = np.arange(len(y_log), len(y_log) + n_future).reshape(-1, 1).astype(float)
+    Xf = np.hstack([tf, tf**2])
+
+    y_pred = np.expm1(best_mdl.predict(Xf))
+    y_pred = np.clip(y_pred, 0, None)
+
+    last_val = float(y_clip[-1]) if len(y_clip) else 0.0
+    if is_ratio:
+        y_pred = np.clip(y_pred, 0.0, 1.5)
+        y_pred = guard_growth(y_pred, last_val, max_up=1.20, max_down=0.80, lower=0.0, upper=1.5)
+    else:
+        hist_max = float(np.nanmax(y_clip)) if len(y_clip) else 0.0
+        cap = max(hist_max * 1.6, last_val * 1.5, 1.0)
+        y_pred = guard_growth(y_pred, last_val, max_up=1.25, max_down=0.75, lower=0.0, upper=cap)
+
+    return y_pred, best_name, best_err
+
+# =========================
+# CSAF PREDICTED (BAR, BIG)
 # =========================
 if metric_group == "CSAF Predicted":
     st.markdown("## 🔮 CSAF Predicted Metrics (FY22–FY28)")
@@ -310,18 +400,6 @@ if metric_group == "CSAF Predicted":
 
     all_quarters = sorted(df["Fiscal Year"].dropna().astype(str).unique(), key=sort_fy)
     train_through = st.sidebar.selectbox("🧊 Forecast Origin (freeze at):", all_quarters, index=max(0, len(all_quarters) - 1))
-
-    forecast_method = st.sidebar.selectbox(
-        "🧠 Forecast Method",
-        [
-            "Ensemble (Robust Seasonal + Trend×Seasonality)",
-            "Seasonal Naive (same quarter last year)",
-            "Robust Seasonal Regression (Huber + quarter dummies, log1p)",
-            "Trend × Seasonal Index (linear trend on de-seasonalized)",
-        ],
-        index=0,
-    )
-
     n_future = st.sidebar.slider("🔮 Forecast horizon (quarters)", 3, 9, 6)
     run_pred = st.sidebar.button("▶ Run Prediction")
 
@@ -337,6 +415,13 @@ if metric_group == "CSAF Predicted":
             return None, None
         return fy, int(m.group(2))
 
+    def quarter_index(labels):
+        qs = []
+        for lbl in labels:
+            _, q = parse_fyq(lbl)
+            qs.append(q if q is not None else np.nan)
+        return np.array(qs, dtype=float)
+
     def make_future_labels(last_label: str, n: int, quarters_per_year=3):
         fy, q = parse_fyq(last_label)
         if fy is None:
@@ -350,87 +435,82 @@ if metric_group == "CSAF Predicted":
             out.append(f"FY{fy:02d} Q{q}")
         return out
 
-    def quarter_index(labels):
-        qs = []
-        for lbl in labels:
-            _, q = parse_fyq(lbl)
-            qs.append(q if q is not None else np.nan)
-        return np.array(qs, dtype=float)
-
     if not run_pred:
-        st.info("Use the sidebar to pick School, Metric, History Years, Forecast Origin, Method, then click **Run Prediction**.")
+        st.info("Pick School, Metric, History, Freeze Origin, then click **Run Prediction**.")
         st.stop()
 
     hist_df = df[(df["Schools"] == selected_school) & (df["Fiscal Year"].isin(selected_fy_hist))].copy()
-    if hist_df.empty:
-        st.warning("⚠️ No rows for the selected school and history years.")
-        st.stop()
-    if selected_metric not in hist_df.columns:
-        st.warning(f"⚠️ {selected_metric} not found for {selected_school}.")
+    if hist_df.empty or selected_metric not in hist_df.columns:
+        st.warning("⚠️ Missing data for selection.")
         st.stop()
 
     hist_df["sort_key"] = hist_df["Fiscal Year"].apply(sort_fy)
     cut_key = sort_fy(train_through)
     hist_df = hist_df[hist_df["sort_key"].apply(lambda k: k <= cut_key)].sort_values("sort_key")
 
-    y_hist = pd.to_numeric(hist_df[selected_metric], errors="coerce").values.astype(float)
-    fy_labels_hist = hist_df["Fiscal Year"].astype(str).tolist()
-    q_hist = quarter_index(fy_labels_hist)
+    y = pd.to_numeric(hist_df[selected_metric], errors="coerce").values.astype(float)
+    labs = hist_df["Fiscal Year"].astype(str).tolist()
+    q = quarter_index(labs)
 
-    valid_mask = ~np.isnan(y_hist) & ~np.isnan(q_hist)
-    y_hist = y_hist[valid_mask]
-    q_hist = q_hist[valid_mask]
-    fy_labels_hist = [fy_labels_hist[i] for i, m in enumerate(valid_mask) if m]
+    m = ~np.isnan(y) & ~np.isnan(q)
+    y, q = y[m], q[m]
+    labs = [labs[i] for i, ok in enumerate(m) if ok]
 
-    if len(y_hist) < 4:
-        st.warning("⚠️ Not enough historical points to produce a reliable forecast (need ≥ 4).")
+    if len(y) < 5:
+        st.warning("⚠️ Not enough points for reliable forecast (need ≥ 5).")
         st.stop()
 
-    def forecast_seasonal_naive(y, q, n):
-        if len(y) < 3:
-            return np.repeat(y[-1], n)
-        return np.array([y[max(0, len(y)-3 + (i % 3))] for i in range(n)], dtype=float)
+    # ---- Advanced CSAF prediction: pick best model by time-series CV ----
+    # Features: time + season dummies (Q2/Q3)
+    t = np.arange(len(y)).reshape(-1, 1).astype(float)
+    seas = make_feats_quarters(q.astype(int))
+    X = np.hstack([t, t**2, seas])
 
-    def forecast_robust_seasonal(y, q, n):
-        t = np.arange(len(y)).reshape(-1, 1)
-        Q2 = (q == 2).astype(int)
-        Q3 = (q == 3).astype(int)
-        X = np.hstack([t, Q2.reshape(-1, 1), Q3.reshape(-1, 1)])
-        mdl = HuberRegressor().fit(X, np.log1p(np.clip(y, 0, None)))
+    y_clip = np.clip(y, 0, None)
+    y_log = np.log1p(y_clip)
 
-        tf = np.arange(len(y), len(y) + n).reshape(-1, 1)
-        qf = ((q[-1] + np.arange(1, n+1) - 1) % 3) + 1
-        Xf = np.hstack([tf, (qf == 2).astype(int).reshape(-1, 1), (qf == 3).astype(int).reshape(-1, 1)])
-        return np.expm1(mdl.predict(Xf))
+    candidates = {
+        "Huber": HuberRegressor(),
+        "Linear": LinearRegression(),
+        "HGBR": HistGradientBoostingRegressor(max_depth=3, learning_rate=0.08, max_iter=700, random_state=42),
+        "MLP": make_pipeline(
+            StandardScaler(),
+            MLPRegressor(
+                hidden_layer_sizes=(24, 12),
+                activation="relu",
+                solver="adam",
+                max_iter=12000,
+                random_state=42,
+                learning_rate="adaptive",
+                early_stopping=True,
+                n_iter_no_change=140
+            )
+        )
+    }
 
-    def forecast_trend_times_seasonal(y, q, n):
-        season_means = {s: np.nanmean(y[q == s]) for s in [1, 2, 3]}
-        global_mean = np.nanmean(y)
-        for s in [1, 2, 3]:
-            if not np.isfinite(season_means.get(s, np.nan)):
-                season_means[s] = global_mean
-        core = y / np.array([season_means[int(s)] for s in q])
-        core = np.where(np.isfinite(core), core, global_mean)
+    scores = {}
+    for name, mdl in candidates.items():
+        try:
+            scores[name] = ts_cv_mae(mdl, X, y_log, splits=3)
+        except Exception:
+            scores[name] = np.inf
 
-        t = np.arange(len(core)).reshape(-1, 1)
-        mdl = LinearRegression().fit(t, np.log1p(np.clip(core, 0, None)))
-
-        tf = np.arange(len(core), len(core) + n).reshape(-1, 1)
-        qf = ((q[-1] + np.arange(1, n+1) - 1) % 3) + 1
-        core_pred = np.expm1(mdl.predict(tf))
-        return core_pred * np.array([season_means[int(s)] for s in qf])
-
-    if forecast_method.startswith("Ensemble"):
-        y_future = 0.5 * forecast_robust_seasonal(y_hist, q_hist, n_future) + 0.5 * forecast_trend_times_seasonal(y_hist, q_hist, n_future)
-    elif forecast_method.startswith("Seasonal Naive"):
-        y_future = forecast_seasonal_naive(y_hist, q_hist, n_future)
-    elif forecast_method.startswith("Robust"):
-        y_future = forecast_robust_seasonal(y_hist, q_hist, n_future)
-    else:
-        y_future = forecast_trend_times_seasonal(y_hist, q_hist, n_future)
+    best_name = min(scores, key=scores.get)
+    best_mdl = candidates[best_name]
+    best_mdl.fit(X, y_log)
 
     future_labels = make_future_labels(train_through, n_future, quarters_per_year=3)
 
+    # future quarter index
+    q_last = int(q[-1])
+    qf = ((q_last + np.arange(1, n_future + 1) - 1) % 3) + 1
+    tf = np.arange(len(y), len(y) + n_future).reshape(-1, 1).astype(float)
+    Xf = np.hstack([tf, tf**2, make_feats_quarters(qf)])
+
+    y_future = np.expm1(best_mdl.predict(Xf))
+    y_future = np.clip(y_future, 0, None)
+
+    # ---- Combine Actual + Forecast ----
     actual_now = df[df["Schools"] == selected_school].copy()
     actual_now["sort_key"] = actual_now["Fiscal Year"].apply(sort_fy)
     actual_now = actual_now.sort_values("sort_key")
@@ -451,183 +531,146 @@ if metric_group == "CSAF Predicted":
         ignore_index=True
     )
 
-    # Text label formatting
-    def fmt_csaf_value(v):
+    # labels
+    def fmt_csaf(v):
         if pd.isna(v):
             return ""
         if selected_metric == "FB Ratio":
             return f"{v:.0%}"
         if selected_metric in ("Liabilities to Assets", "Current Ratio"):
             return f"{v:.2f}"
-        if selected_metric == "Unrestricted Days COH":
-            return f"{v:,.0f}"
-        return f"{v:,.2f}"
+        return f"{v:,.0f}"
 
-    combined["TextLabel"] = combined["Value"].apply(fmt_csaf_value)
+    combined["TextLabel"] = combined["Value"].apply(fmt_csaf)
 
     fig = px.bar(
-        combined, x="Quarter", y="Value", color="Type",
+        combined,
+        x="Quarter", y="Value",
+        color="Type",
         barmode="group",
         text="TextLabel",
-        title=f"{selected_school} — {selected_metric} (Actual vs Frozen Forecast)"
+        title=f"{selected_school} — {selected_metric} (Best model: {best_name})"
     )
     fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
-    fig.update_xaxes(tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
+    fig.update_xaxes(tickangle=45)
     fig = add_best_practice_csaf(fig, selected_metric)
-    fig = thicken_and_enlarge(fig, height=BASE_HEIGHT_TALL)
+    fig = apply_plot_style(fig, CSAF_PRED_HEIGHT)
+    fig.update_layout(bargap=0.05, bargroupgap=0.03)  # thicker bars look
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# BUDGET TO ENROLLMENT (ACTUALS) — BAR + LINE (points) — NO BEST PRACTICE
+# BUDGET TO ENROLLMENT (ACTUAL) — selector Bar/Line/Combo (NO best practice)
 # =========================
 elif metric_group == "Budget to Enrollment":
-    st.markdown("## 📈 Budget to Enrollment (Actuals — Bar + Line with Data Points)")
+    st.markdown("## 📊 Budget to Enrollment (Actuals)")
 
-    selected_schools = st.sidebar.multiselect("Select School(s):", school_options_budget)
+    chart_mode = st.sidebar.selectbox("📈 Enrollment Chart Type:", ["Line (markers)", "Bar", "Combo (Bar + Line + markers)"], index=0)
+
+    selected_schools = st.sidebar.multiselect("🏫 Select School(s):", school_options_budget)
 
     fy_all_b = sorted(df_budget_long["Fiscal Year"].dropna().astype(str).unique(), key=sort_fy_only)
     default_fy_actuals = [fy for fy in fy_all_b if START_FY <= sort_fy_only(fy) <= END_ACTUAL_FY]
-    selected_fy_b = st.sidebar.multiselect("Select Fiscal Year(s):", fy_all_b, default=default_fy_actuals or fy_all_b)
-    if st.sidebar.checkbox("Select All Fiscal Years (Actuals)"):
-        selected_fy_b = fy_all_b
+    selected_fy_b = st.sidebar.multiselect("📅 Select Fiscal Year(s):", fy_all_b, default=default_fy_actuals or fy_all_b)
 
     metrics_list = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     metrics_list = [m for m in metrics_list if m in df_budget_long["Metric"].unique()]
-    selected_metrics = st.sidebar.multiselect("Select Metrics:", metrics_list, default=metrics_list)
+    selected_metrics = st.sidebar.multiselect("📌 Select Metrics:", metrics_list, default=["October 1 Count", "February 1 Count"])
 
-    df_f = df_budget_long[
-        (df_budget_long["Schools"].isin(selected_schools)) &
-        (df_budget_long["Metric"].isin(selected_metrics)) &
-        (df_budget_long["Fiscal Year"].isin(selected_fy_b))
-    ].copy()
-
-    if df_f.empty:
-        st.warning("⚠️ No Budget to Enrollment data matches your filters.")
+    if not selected_schools:
+        st.warning("⚠️ Select at least one school.")
         st.stop()
 
-    df_f["Fiscal Year"] = df_f["Fiscal Year"].astype(str).str.strip().apply(fy_std)
-    df_f["ValueNum"] = pd.to_numeric(df_f["Value"], errors="coerce")
-    df_f = df_f.dropna(subset=["ValueNum"])
+    axis_order = [fy for fy in FY22_TO_FY28 if fy in selected_fy_b]
 
-    # Ensure proper ordering so line is clean (no “zigzag” due to sorting issues)
-    df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
-    df_f = df_f.sort_values(["Schools", "Metric", "sort_key"])
+    # one chart per school (avoids facet-axis crashes)
+    for school in selected_schools:
+        df_f = df_budget_long[
+            (df_budget_long["Schools"] == school) &
+            (df_budget_long["Metric"].isin(selected_metrics)) &
+            (df_budget_long["Fiscal Year"].isin(selected_fy_b))
+        ].copy()
 
-    axis_order = [fy for fy in FY22_TO_FY28 if fy in df_f["Fiscal Year"].unique()]
+        df_f["Fiscal Year"] = df_f["Fiscal Year"].astype(str).str.strip().apply(fy_std)
+        df_f["ValueNum"] = pd.to_numeric(df_f["Value"], errors="coerce")
+        df_f = df_f.dropna(subset=["ValueNum"])
 
-    # Facet by schools using Plotly Express BAR then overlay per facet
-    base_bar = px.bar(
-        df_f,
-        x="Fiscal Year",
-        y="ValueNum",
-        color="Metric",
-        color_discrete_map=budget_metric_color_map,
-        barmode="group",
-        facet_col="Schools",
-        facet_col_wrap=2,
-        title=f"Budget to Enrollment — {', '.join(selected_metrics)} (Bars + Comparison Lines)"
-    )
+        if df_f.empty:
+            st.info(f"ℹ️ No enrollment data for {school} with current filters.")
+            continue
 
-    # Add bar text labels
-    def fmt_budget_text(metric, v):
-        if pd.isna(v) or v == 0:
-            return ""
-        if metric == "Budget to Enrollment Ratio":
-            return f"{v:.0%}" if v <= 1.5 else f"{v:.2f}"
-        return f"{v:,.0f}"
+        df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
+        df_f = df_f.sort_values(["Metric", "sort_key"])
 
-    df_f["TextLabel"] = [fmt_budget_text(m, v) for m, v in zip(df_f["Metric"], df_f["ValueNum"])]
+        # split ratio vs others (ratio can cause “zigzag” scale issues)
+        is_ratio_selected = "Budget to Enrollment Ratio" in selected_metrics
+        df_ratio = df_f[df_f["Metric"] == "Budget to Enrollment Ratio"].copy()
+        df_main = df_f[df_f["Metric"] != "Budget to Enrollment Ratio"].copy()
 
-    # Update bar traces to show text
-    for tr in base_bar.data:
-        tr.update(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
+        fig = go.Figure()
 
-    # Build a mapping from facet subplot xaxis name to school value
-    # Plotly facet uses xaxis, xaxis2, ... and yaxis, yaxis2 ...
-    schools_in_plot = list(dict.fromkeys(df_f["Schools"].tolist()))
-    # Plotly order for facets comes from unique order in data; px sets category order internally
-    # We'll overlay line traces per school + metric on the correct subplot by using row/col refs via add_trace + "xaxis"/"yaxis" assignments.
-    # Easiest reliable method: use fig.for_each_annotation to get facet titles, then map to axis ids.
-    fig = base_bar
+        # bars (main metrics)
+        if chart_mode in ["Bar", "Combo (Bar + Line + markers)"]:
+            for met in df_main["Metric"].unique():
+                d = df_main[df_main["Metric"] == met].copy()
+                d = d.sort_values("sort_key")
+                fig.add_trace(go.Bar(
+                    x=d["Fiscal Year"],
+                    y=d["ValueNum"],
+                    name=met,
+                    marker_color=budget_metric_color_map.get(met, None),
+                    text=[f"{v:,.0f}" for v in d["ValueNum"]],
+                    textposition="outside"
+                ))
 
-    # Ensure FY order
-    fig.update_xaxes(categoryorder="array", categoryarray=axis_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
-
-    # Overlay LINE (straight segments) for each metric per school
-    # Determine facet axis ids by reading annotations
-    # Annotation text like "Schools=XYZ"
-    facet_map = {}  # school -> (xaxis_name, yaxis_name)
-    for ann in fig.layout.annotations:
-        if ann.text and "Schools=" in ann.text:
-            school_name = ann.text.split("Schools=")[-1]
-            # Each annotation has xref like 'paper' but we can infer axis by its subplot domain.
-            # We’ll map by matching annotation x/y to axis domains.
-            facet_map[school_name] = ann
-
-    # Helper: find axis name given a school via closest domain match
-    def axis_for_school(school):
-        # fallback single plot
-        if len(fig.layout.xaxis.domain) > 0 and len(fig.layout) > 0 and len(fig.data) > 0:
-            pass
-
-        ann = facet_map.get(school)
-        if ann is None:
-            return "x", "y"
-
-        # Find xaxis whose domain contains annotation x (paper coords)
-        ax_name = "x"
-        ay_name = "y"
-        x_paper = ann.x
-        y_paper = ann.y
-
-        for k in fig.layout:
-            if str(k).startswith("xaxis"):
-                ax = fig.layout[k]
-                if hasattr(ax, "domain") and ax.domain and ax.domain[0] <= x_paper <= ax.domain[1]:
-                    ax_name = "x" if k == "xaxis" else k.replace("axis", "")
-            if str(k).startswith("yaxis"):
-                ay = fig.layout[k]
-                if hasattr(ay, "domain") and ay.domain and ay.domain[0] <= y_paper <= ay.domain[1]:
-                    ay_name = "y" if k == "yaxis" else k.replace("axis", "")
-        return ax_name, ay_name
-
-    # Add line traces
-    for school in df_f["Schools"].unique():
-        xref, yref = axis_for_school(school)
-        for met in selected_metrics:
-            dsub = df_f[(df_f["Schools"] == school) & (df_f["Metric"] == met)].copy()
-            if dsub.empty:
-                continue
-            dsub = dsub.sort_values("sort_key")
-            fig.add_trace(
-                go.Scatter(
-                    x=dsub["Fiscal Year"],
-                    y=dsub["ValueNum"],
+        # lines (main metrics) — clean connected straight lines (no zigzag: sorted)
+        if chart_mode in ["Line (markers)", "Combo (Bar + Line + markers)"]:
+            for met in df_main["Metric"].unique():
+                d = df_main[df_main["Metric"] == met].copy()
+                d = d.sort_values("sort_key")
+                fig.add_trace(go.Scatter(
+                    x=d["Fiscal Year"],
+                    y=d["ValueNum"],
                     mode="lines+markers+text",
                     name=f"{met} (Line)",
-                    legendgroup=met,
-                    showlegend=False,  # keep legend clean (bars already show metric legend)
-                    text=dsub["TextLabel"],
+                    text=[f"{v:,.0f}" for v in d["ValueNum"]],
                     textposition="top center",
+                    line=dict(width=3),
                     connectgaps=True,
-                ),
-                # assign to facet axes
-                row=None,
-                col=None
-            )
-            # Manually assign axis refs (Plotly will accept xaxis='x2' etc)
-            fig.data[-1].update(xaxis=xref, yaxis=yref)
+                    showlegend=False if chart_mode == "Combo (Bar + Line + markers)" else True
+                ))
 
-    fig.update_layout(
-        height=BASE_HEIGHT_TALLER,
-        font=dict(size=BASE_FONT_SIZE),
-        legend_font=dict(size=BASE_FONT_SIZE),
-        margin=dict(t=70, b=90)
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        # ratio on secondary axis (optional)
+        if is_ratio_selected and not df_ratio.empty:
+            df_ratio = df_ratio.sort_values("sort_key")
+            fig.add_trace(go.Scatter(
+                x=df_ratio["Fiscal Year"],
+                y=df_ratio["ValueNum"],
+                mode="lines+markers+text",
+                name="Budget to Enrollment Ratio",
+                text=[f"{v:.0%}" for v in df_ratio["ValueNum"]],
+                textposition="bottom center",
+                line=dict(width=3),
+                connectgaps=True,
+                yaxis="y2"
+            ))
+
+        fig.update_layout(
+            title=f"Budget / Enrollment Trend: {school}",
+            barmode="group",
+            yaxis=dict(title="Budget / Counts"),
+            yaxis2=dict(
+                title="Ratio",
+                overlaying="y",
+                side="right",
+                range=[0, 1.5]
+            ),
+        )
+        fig.update_xaxes(categoryorder="array", categoryarray=axis_order, tickangle=0)
+        fig = apply_plot_style(fig, BASE_HEIGHT_TALLER)
+        st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# BUDGET TO ENROLLMENT PREDICTED — BAR + LINE (points) — NO BEST PRACTICE
+# BUDGET TO ENROLLMENT PREDICTED — selector Bar/Line/Combo (NO best practice)
 # =========================
 elif metric_group == "Budget to Enrollment Predicted":
     st.markdown("## 🔮 Budget to Enrollment Predicted (Actual ≤ Freeze • Forecast → FY28)")
@@ -636,110 +679,33 @@ elif metric_group == "Budget to Enrollment Predicted":
         st.warning("⚠️ Budget dataset not loaded.")
         st.stop()
 
+    chart_mode = st.sidebar.selectbox("📈 Enrollment Prediction Chart Type:", ["Line (markers)", "Bar", "Combo (Bar + Line + markers)"], index=2)
+
     selected_school_b = st.sidebar.selectbox("🏫 Select School:", sorted(df_budget_long["Schools"].dropna().unique()))
+
     metrics_all = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     metrics_all = [m for m in metrics_all if m in df_budget_long["Metric"].unique()]
-    selected_metrics_b = st.sidebar.multiselect("📊 Choose Metric(s):", metrics_all, default=metrics_all)
+    selected_metrics_b = st.sidebar.multiselect("📌 Choose Metric(s):", metrics_all, default=["October 1 Count", "February 1 Count"])
 
     fy_all = sorted(df_budget_long["Fiscal Year"].dropna().astype(str).unique(), key=sort_fy_only)
     default_hist = [fy for fy in fy_all if START_FY <= sort_fy_only(fy) <= END_ACTUAL_FY]
-    selected_fy_hist_b = st.sidebar.multiselect("📅 History Fiscal Years (training):", fy_all, default=default_hist or fy_all)
-    if st.sidebar.checkbox("Select All Fiscal Years (training)"):
-        selected_fy_hist_b = fy_all
+    selected_fy_hist_b = st.sidebar.multiselect("📅 History FYs (training):", fy_all, default=default_hist or fy_all)
 
     default_origin = fy_label(END_ACTUAL_FY)
     origin_index = fy_all.index(default_origin) if default_origin in fy_all else max(0, len(fy_all) - 1)
-    train_through_b = st.sidebar.selectbox("🧊 Forecast Origin (freeze at):", fy_all, index=origin_index)
+    train_through_b = st.sidebar.selectbox("🧊 Freeze at:", fy_all, index=origin_index)
 
     show_model_info = st.sidebar.checkbox("Show model + error details", value=True)
 
     run_pred_b = st.sidebar.button("▶ Run Budget Prediction")
     if not run_pred_b:
-        st.info("Pick School, Metric(s), History, Freeze Origin, then click **Run Budget Prediction**.")
+        st.info("Pick School, Metrics, History, Freeze FY, then click **Run Budget Prediction**.")
         st.stop()
 
     origin_year = sort_fy_only(train_through_b)
     n_future_b = max(0, END_FORECAST_FY - origin_year)
     future_labels = [fy_label(y) for y in range(origin_year + 1, END_FORECAST_FY + 1)]
-
-    def make_supervised(n):
-        t = np.arange(n).reshape(-1, 1).astype(float)
-        return np.hstack([t, t**2])
-
-    def ts_cv_mae(model, X, y_log, splits=3):
-        if len(y_log) < 4:
-            return np.inf
-        n_splits = min(splits, max(2, len(y_log) - 1))
-        tscv = TimeSeriesSplit(n_splits=n_splits)
-        maes = []
-        for tr, te in tscv.split(X):
-            model.fit(X[tr], y_log[tr])
-            pred = model.predict(X[te])
-            maes.append(mean_absolute_error(y_log[te], pred))
-        return float(np.mean(maes)) if maes else np.inf
-
-    def best_forecast(y, n_future, metric_name):
-        if len(y) == 0:
-            return np.zeros(n_future), "None", np.inf
-
-        y_clip = np.clip(y, 0, None)
-        if metric_name == "Budget to Enrollment Ratio":
-            y_clip = np.clip(y_clip, 0.0, 1.5)
-
-        y_log = np.log1p(y_clip)
-        X = make_supervised(len(y_log))
-
-        candidates = {
-            "Huber": HuberRegressor(),
-            "Linear": LinearRegression(),
-            "HGBR": HistGradientBoostingRegressor(
-                max_depth=3,
-                learning_rate=0.08,
-                max_iter=500,
-                random_state=42
-            ),
-            "MLP": make_pipeline(
-                StandardScaler(),
-                MLPRegressor(
-                    hidden_layer_sizes=(16, 8),
-                    activation="relu",
-                    solver="adam",
-                    max_iter=8000,
-                    random_state=42,
-                    learning_rate="adaptive",
-                    early_stopping=True,
-                    n_iter_no_change=120
-                )
-            )
-        }
-
-        scores = {}
-        for name, mdl in candidates.items():
-            try:
-                scores[name] = ts_cv_mae(mdl, X, y_log, splits=3)
-            except Exception:
-                scores[name] = np.inf
-
-        best_name = min(scores, key=scores.get)
-        best_model = candidates[best_name]
-        best_err = scores[best_name]
-
-        best_model.fit(X, y_log)
-
-        Xf = make_supervised(len(y_log) + n_future)[-n_future:]
-        y_pred = np.expm1(best_model.predict(Xf))
-        y_pred = np.clip(y_pred, 0, None)
-
-        last_val = float(y_clip[-1]) if len(y_clip) else 0.0
-        if metric_name == "Budget to Enrollment Ratio":
-            y_pred = np.clip(y_pred, 0.0, 1.5)
-            y_pred = guard_growth(y_pred, last_val, max_up=1.20, max_down=0.80, lower=0.0, upper=1.5)
-        else:
-            hist_max = float(np.nanmax(y_clip)) if len(y_clip) else 0.0
-            cap = max(hist_max * 1.6, last_val * 1.5, 1.0)
-            y_pred = guard_growth(y_pred, last_val, max_up=1.25, max_down=0.75, lower=0.0, upper=cap)
-
-        return y_pred, best_name, best_err
+    axis_order = FY22_TO_FY28
 
     frames = []
     model_rows = []
@@ -757,20 +723,17 @@ elif metric_group == "Budget to Enrollment Predicted":
 
         y = pd.to_numeric(dfh["Value"], errors="coerce").values.astype(float)
 
-        if n_future_b > 0:
-            if len(y) >= 3:
-                y_future, best_name, best_err = best_forecast(y, n_future_b, met)
-            elif len(y) == 2:
-                slope = (y[-1] - y[-2])
-                last = y[-1]
-                y_future = np.array([max(0.0, last + slope * (i + 1)) for i in range(n_future_b)], dtype=float)
-                best_name, best_err = "2pt-trend", np.nan
-            elif len(y) == 1:
-                y_future = np.array([max(0.0, y[0]) for _ in range(n_future_b)], dtype=float)
-                best_name, best_err = "carry-forward", np.nan
-            else:
-                y_future = np.zeros(n_future_b, dtype=float)
-                best_name, best_err = "none", np.nan
+        is_ratio = (met == "Budget to Enrollment Ratio")
+        if n_future_b > 0 and len(y) >= 3:
+            y_future, best_name, best_err = best_model_forecast_yearly(y, n_future_b, is_ratio=is_ratio)
+        elif n_future_b > 0 and len(y) == 2:
+            slope = (y[-1] - y[-2])
+            last = y[-1]
+            y_future = np.array([max(0.0, last + slope * (i + 1)) for i in range(n_future_b)], dtype=float)
+            best_name, best_err = "2pt-trend", np.nan
+        elif n_future_b > 0 and len(y) == 1:
+            y_future = np.array([max(0.0, y[0]) for _ in range(n_future_b)], dtype=float)
+            best_name, best_err = "carry-forward", np.nan
         else:
             y_future = np.array([])
             best_name, best_err = "none", np.nan
@@ -970,3 +933,4 @@ else:
 
     fig = thicken_and_enlarge(fig, height=BASE_HEIGHT_TALL)
     st.plotly_chart(fig, use_container_width=True)
+
