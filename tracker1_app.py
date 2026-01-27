@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 import os
 import numpy as np
 import re
@@ -71,7 +72,6 @@ END_FORECAST_FY = 28 # FY28 (end of forecast)
 def fy_label(y: int) -> str:
     return f"FY{int(y):02d}"
 
-# Robust FY parser: handles FY22, FY 22, FY2022, 2022 → 22
 def fy_num(fy_str: str):
     s = str(fy_str)
     digits = re.sub(r"[^0-9]", "", s)
@@ -85,10 +85,6 @@ def fy_num(fy_str: str):
     return n
 
 def fy_std(val) -> str:
-    """
-    Normalize anything like FY22, FY 2022, 2022, '22' => 'FY22'
-    Returns original string if it can't parse.
-    """
     n = fy_num(val)
     return fy_label(n) if n is not None else str(val).strip()
 
@@ -111,13 +107,10 @@ def sort_fy_only(x):
 def full_fy_range(start_y, end_y):
     return [fy_label(y) for y in range(start_y, end_y + 1)]
 
-# Canonical FY sequences (FORCE FY22 first)
 FY22_TO_FY26 = full_fy_range(START_FY, END_ACTUAL_FY)
 FY22_TO_FY28 = full_fy_range(START_FY, END_FORECAST_FY)
 
 def thicken_and_enlarge(fig, height=None):
-    """Bigger fonts/labels."""
-    fig.update_traces(textposition="top center", textfont_size=BASE_TEXT_FONT_SIZE)
     fig.update_layout(
         height=height or BASE_HEIGHT_TALL,
         font=dict(size=BASE_FONT_SIZE),
@@ -129,7 +122,6 @@ def thicken_and_enlarge(fig, height=None):
     return fig
 
 def guard_growth(y_future, last_val, max_up=1.35, max_down=0.70, lower=0.0, upper=None):
-    """Stepwise cap to prevent runaway spikes or collapses."""
     out = []
     prev = float(last_val)
     for v in y_future:
@@ -145,7 +137,7 @@ def guard_growth(y_future, last_val, max_up=1.35, max_down=0.70, lower=0.0, uppe
     return np.array(out, dtype=float)
 
 # =========================
-# BEST PRACTICE / THRESHOLDS
+# BEST PRACTICE / THRESHOLDS (CSAF ONLY)
 # =========================
 csaf_metrics = ["FB Ratio", "Liabilities to Assets", "Current Ratio", "Unrestricted Days COH"]
 csaf_descriptions = {
@@ -154,11 +146,6 @@ csaf_descriptions = {
     "Current Ratio": {"desc": "Current Assets ÷ Current Liabilities (Best practice ≥ 1.5)", "threshold": 1.50, "direction": "gte"},
     "Unrestricted Days COH": {"desc": "Unrestricted Cash ÷ ((Total Exp. - Depreciation) ÷ 365) (Best practice ≥ 60)", "threshold": 60, "direction": "gte"},
 }
-
-# Budget-to-Enrollment ratio best practice band (you can adjust)
-BUDGET_RATIO_TARGET = 1.00
-BUDGET_RATIO_BAND_LOW = 0.90
-BUDGET_RATIO_BAND_HIGH = 1.10
 
 def add_best_practice_csaf(fig, metric):
     if metric not in csaf_descriptions:
@@ -171,24 +158,6 @@ def add_best_practice_csaf(fig, metric):
         line_dash="dot",
         line_color=line_color,
         annotation_text="Best Practice",
-        annotation_position="top left"
-    )
-    return fig
-
-def add_best_practice_budget_ratio(fig):
-    # Band + center line
-    fig.add_hrect(
-        y0=BUDGET_RATIO_BAND_LOW, y1=BUDGET_RATIO_BAND_HIGH,
-        line_width=0,
-        fillcolor="rgba(0,200,0,0.10)",
-        annotation_text="Best Practice Band (0.90–1.10)",
-        annotation_position="top left"
-    )
-    fig.add_hline(
-        y=BUDGET_RATIO_TARGET,
-        line_dash="dot",
-        line_color="green",
-        annotation_text="Target = 1.00",
         annotation_position="top left"
     )
     return fig
@@ -207,8 +176,16 @@ df.columns = df.columns.str.strip()
 df = df.dropna(subset=["Schools", "Fiscal Year"])
 df["Fiscal Year"] = df["Fiscal Year"].astype(str).str.strip()
 
-# Standardize FY labels so order works consistently
-df["Fiscal Year"] = df["Fiscal Year"].apply(lambda x: f"{fy_std(str(x).split()[0])} " + " ".join(str(x).split()[1:]) if len(str(x).split()) > 1 else str(x).strip())
+# Standardize leading FY token in 'Fiscal Year' (keeps Q parts)
+def std_fyq_label(x):
+    s = str(x).strip()
+    parts = s.split()
+    if not parts:
+        return s
+    parts[0] = fy_std(parts[0])
+    return " ".join(parts)
+
+df["Fiscal Year"] = df["Fiscal Year"].apply(std_fyq_label)
 
 value_vars = [c for c in df.columns if c not in ["Schools", "Fiscal Year"]]
 df_long = df.melt(
@@ -251,7 +228,6 @@ try:
         df_budget_raw = pd.read_excel(fy26_path, sheet_name="FY26 Student enrollment", header=1)
         df_budget_raw.columns = df_budget_raw.columns.str.strip()
 
-    # Canonical names
     rename_map = {}
     for c in df_budget_raw.columns:
         cn = re.sub(r"\s+", " ", str(c).strip()).lower()
@@ -281,9 +257,7 @@ try:
     expected_cols = ["Schools", "Fiscal Year", "Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
     df_budget_raw = df_budget_raw.dropna(subset=["Schools", "Fiscal Year"]).copy()
 
-    # Standardize FY
-    df_budget_raw["Fiscal Year"] = df_budget_raw["Fiscal Year"].astype(str).str.strip()
-    df_budget_raw["Fiscal Year"] = df_budget_raw["Fiscal Year"].apply(fy_std)
+    df_budget_raw["Fiscal Year"] = df_budget_raw["Fiscal Year"].astype(str).str.strip().apply(fy_std)
 
     df_budget_long = df_budget_raw.melt(
         id_vars=["Schools", "Fiscal Year"],
@@ -320,7 +294,7 @@ if not df_budget_long.empty:
 metric_group = st.sidebar.radio("Choose Dashboard:", modes)
 
 # =========================
-# CSAF PREDICTED
+# CSAF PREDICTED (BAR)
 # =========================
 if metric_group == "CSAF Predicted":
     st.markdown("## 🔮 CSAF Predicted Metrics (FY22–FY28)")
@@ -477,33 +451,37 @@ if metric_group == "CSAF Predicted":
         ignore_index=True
     )
 
-    fig = px.line(
+    # Text label formatting
+    def fmt_csaf_value(v):
+        if pd.isna(v):
+            return ""
+        if selected_metric == "FB Ratio":
+            return f"{v:.0%}"
+        if selected_metric in ("Liabilities to Assets", "Current Ratio"):
+            return f"{v:.2f}"
+        if selected_metric == "Unrestricted Days COH":
+            return f"{v:,.0f}"
+        return f"{v:,.2f}"
+
+    combined["TextLabel"] = combined["Value"].apply(fmt_csaf_value)
+
+    fig = px.bar(
         combined, x="Quarter", y="Value", color="Type",
-        markers=True,
+        barmode="group",
+        text="TextLabel",
         title=f"{selected_school} — {selected_metric} (Actual vs Frozen Forecast)"
     )
-    fig.update_traces(connectgaps=True)
-
-    # Format y labels
-    if selected_metric == "FB Ratio":
-        fig.update_traces(hovertemplate="%{y:.1%}<extra></extra>")
-    elif selected_metric in ("Liabilities to Assets", "Current Ratio"):
-        fig.update_traces(hovertemplate="%{y:.2f}<extra></extra>")
-    else:
-        fig.update_traces(hovertemplate="%{y:,.0f}<extra></extra>")
-
-    # Best practice line
-    fig = add_best_practice_csaf(fig, selected_metric)
-
+    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
     fig.update_xaxes(tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
+    fig = add_best_practice_csaf(fig, selected_metric)
     fig = thicken_and_enlarge(fig, height=BASE_HEIGHT_TALL)
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# BUDGET TO ENROLLMENT (ACTUALS) — LINE + FY ORDER FIX + BEST PRACTICE BAND
+# BUDGET TO ENROLLMENT (ACTUALS) — BAR + LINE (points) — NO BEST PRACTICE
 # =========================
 elif metric_group == "Budget to Enrollment":
-    st.markdown("## 📈 Budget to Enrollment (Actuals — Line Chart)")
+    st.markdown("## 📈 Budget to Enrollment (Actuals — Bar + Line with Data Points)")
 
     selected_schools = st.sidebar.multiselect("Select School(s):", school_options_budget)
 
@@ -529,25 +507,116 @@ elif metric_group == "Budget to Enrollment":
 
     df_f["Fiscal Year"] = df_f["Fiscal Year"].astype(str).str.strip().apply(fy_std)
     df_f["ValueNum"] = pd.to_numeric(df_f["Value"], errors="coerce")
-    df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
-    df_f = df_f.sort_values("sort_key")
+    df_f = df_f.dropna(subset=["ValueNum"])
 
-    fig = px.line(
-        df_f,
-        x="Fiscal Year", y="ValueNum",
-        color="Metric",
-        markers=True,
-        facet_col="Schools", facet_col_wrap=2,
-        title=f"Budget to Enrollment — {', '.join(selected_metrics)}"
-    )
-    fig.update_traces(connectgaps=True)
+    # Ensure proper ordering so line is clean (no “zigzag” due to sorting issues)
+    df_f["sort_key"] = df_f["Fiscal Year"].apply(sort_fy_only)
+    df_f = df_f.sort_values(["Schools", "Metric", "sort_key"])
 
     axis_order = [fy for fy in FY22_TO_FY28 if fy in df_f["Fiscal Year"].unique()]
+
+    # Facet by schools using Plotly Express BAR then overlay per facet
+    base_bar = px.bar(
+        df_f,
+        x="Fiscal Year",
+        y="ValueNum",
+        color="Metric",
+        color_discrete_map=budget_metric_color_map,
+        barmode="group",
+        facet_col="Schools",
+        facet_col_wrap=2,
+        title=f"Budget to Enrollment — {', '.join(selected_metrics)} (Bars + Comparison Lines)"
+    )
+
+    # Add bar text labels
+    def fmt_budget_text(metric, v):
+        if pd.isna(v) or v == 0:
+            return ""
+        if metric == "Budget to Enrollment Ratio":
+            return f"{v:.0%}" if v <= 1.5 else f"{v:.2f}"
+        return f"{v:,.0f}"
+
+    df_f["TextLabel"] = [fmt_budget_text(m, v) for m, v in zip(df_f["Metric"], df_f["ValueNum"])]
+
+    # Update bar traces to show text
+    for tr in base_bar.data:
+        tr.update(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
+
+    # Build a mapping from facet subplot xaxis name to school value
+    # Plotly facet uses xaxis, xaxis2, ... and yaxis, yaxis2 ...
+    schools_in_plot = list(dict.fromkeys(df_f["Schools"].tolist()))
+    # Plotly order for facets comes from unique order in data; px sets category order internally
+    # We'll overlay line traces per school + metric on the correct subplot by using row/col refs via add_trace + "xaxis"/"yaxis" assignments.
+    # Easiest reliable method: use fig.for_each_annotation to get facet titles, then map to axis ids.
+    fig = base_bar
+
+    # Ensure FY order
     fig.update_xaxes(categoryorder="array", categoryarray=axis_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
 
-    # Best practice band/line ONLY if ratio is included
-    if "Budget to Enrollment Ratio" in selected_metrics:
-        fig = add_best_practice_budget_ratio(fig)
+    # Overlay LINE (straight segments) for each metric per school
+    # Determine facet axis ids by reading annotations
+    # Annotation text like "Schools=XYZ"
+    facet_map = {}  # school -> (xaxis_name, yaxis_name)
+    for ann in fig.layout.annotations:
+        if ann.text and "Schools=" in ann.text:
+            school_name = ann.text.split("Schools=")[-1]
+            # Each annotation has xref like 'paper' but we can infer axis by its subplot domain.
+            # We’ll map by matching annotation x/y to axis domains.
+            facet_map[school_name] = ann
+
+    # Helper: find axis name given a school via closest domain match
+    def axis_for_school(school):
+        # fallback single plot
+        if len(fig.layout.xaxis.domain) > 0 and len(fig.layout) > 0 and len(fig.data) > 0:
+            pass
+
+        ann = facet_map.get(school)
+        if ann is None:
+            return "x", "y"
+
+        # Find xaxis whose domain contains annotation x (paper coords)
+        ax_name = "x"
+        ay_name = "y"
+        x_paper = ann.x
+        y_paper = ann.y
+
+        for k in fig.layout:
+            if str(k).startswith("xaxis"):
+                ax = fig.layout[k]
+                if hasattr(ax, "domain") and ax.domain and ax.domain[0] <= x_paper <= ax.domain[1]:
+                    ax_name = "x" if k == "xaxis" else k.replace("axis", "")
+            if str(k).startswith("yaxis"):
+                ay = fig.layout[k]
+                if hasattr(ay, "domain") and ay.domain and ay.domain[0] <= y_paper <= ay.domain[1]:
+                    ay_name = "y" if k == "yaxis" else k.replace("axis", "")
+        return ax_name, ay_name
+
+    # Add line traces
+    for school in df_f["Schools"].unique():
+        xref, yref = axis_for_school(school)
+        for met in selected_metrics:
+            dsub = df_f[(df_f["Schools"] == school) & (df_f["Metric"] == met)].copy()
+            if dsub.empty:
+                continue
+            dsub = dsub.sort_values("sort_key")
+            fig.add_trace(
+                go.Scatter(
+                    x=dsub["Fiscal Year"],
+                    y=dsub["ValueNum"],
+                    mode="lines+markers+text",
+                    name=f"{met} (Line)",
+                    legendgroup=met,
+                    showlegend=False,  # keep legend clean (bars already show metric legend)
+                    text=dsub["TextLabel"],
+                    textposition="top center",
+                    connectgaps=True,
+                ),
+                # assign to facet axes
+                row=None,
+                col=None
+            )
+            # Manually assign axis refs (Plotly will accept xaxis='x2' etc)
+            fig.data[-1].update(xaxis=xref, yaxis=yref)
 
     fig.update_layout(
         height=BASE_HEIGHT_TALLER,
@@ -558,7 +627,7 @@ elif metric_group == "Budget to Enrollment":
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# BUDGET TO ENROLLMENT PREDICTED — ADVANCED (MIN ERROR BY TIME-SERIES CV) + LINE + BEST PRACTICE BAND
+# BUDGET TO ENROLLMENT PREDICTED — BAR + LINE (points) — NO BEST PRACTICE
 # =========================
 elif metric_group == "Budget to Enrollment Predicted":
     st.markdown("## 🔮 Budget to Enrollment Predicted (Actual ≤ Freeze • Forecast → FY28)")
@@ -593,9 +662,7 @@ elif metric_group == "Budget to Enrollment Predicted":
     n_future_b = max(0, END_FORECAST_FY - origin_year)
     future_labels = [fy_label(y) for y in range(origin_year + 1, END_FORECAST_FY + 1)]
 
-    # --- ADVANCED: choose lowest-error model (time-series CV) ---
     def make_supervised(n):
-        # time index features
         t = np.arange(n).reshape(-1, 1).astype(float)
         return np.hstack([t, t**2])
 
@@ -747,37 +814,78 @@ elif metric_group == "Budget to Enrollment Predicted":
 
     combined["FY"] = combined["FY"].astype(str).str.strip().apply(fy_std)
     combined["ValueNum"] = pd.to_numeric(combined["Value"], errors="coerce")
+    combined = combined.dropna(subset=["ValueNum"])
 
     combined["sort_key"] = combined["FY"].apply(sort_fy_only)
-    combined = combined.sort_values(["sort_key", "Metric", "Type"]).drop(columns="sort_key")
+    combined = combined.sort_values(["Metric", "Type", "sort_key"])
 
-    fig = px.line(
-        combined,
-        x="FY", y="ValueNum",
-        color="Metric",
-        line_dash="Type",
-        markers=True,
-        title=f"{selected_school_b} — Budget Metrics (Actual ≤ {train_through_b} • Forecast → FY{END_FORECAST_FY})"
-    )
-    fig.update_traces(connectgaps=True)
+    axis_order = FY22_TO_FY28
 
-    fig.update_xaxes(
-        categoryorder="array",
-        categoryarray=FY22_TO_FY28,
-        tickangle=45,
-        tickfont=dict(size=BASE_LABEL_FONT_SIZE)
-    )
+    # ---- Create combo chart: Bar + Line ----
+    fig = go.Figure()
 
-    # Best practice band/line if ratio included
-    if "Budget to Enrollment Ratio" in selected_metrics_b:
-        fig = add_best_practice_budget_ratio(fig)
+    # Bar traces (grouped by Metric, with pattern via Type)
+    # To keep it readable: bars grouped by Metric, and Type shown via opacity + legend label.
+    # (You can change this later if you want side-by-side Actual vs Forecast bars.)
+    for met in selected_metrics_b:
+        dmet = combined[combined["Metric"] == met].copy()
+        if dmet.empty:
+            continue
+        # Bar per Type
+        for tname in ["Actual", "Forecast (Frozen)"]:
+            dt = dmet[dmet["Type"] == tname].copy()
+            if dt.empty:
+                continue
+            fig.add_trace(
+                go.Bar(
+                    x=dt["FY"],
+                    y=dt["ValueNum"],
+                    name=f"{met} — {tname}",
+                    legendgroup=f"{met}-{tname}",
+                    opacity=0.85 if tname == "Actual" else 0.55,
+                    text=[("" if pd.isna(v) else (f"{v:.0%}" if met == "Budget to Enrollment Ratio" else f"{v:,.0f}")) for v in dt["ValueNum"]],
+                    textposition="outside",
+                )
+            )
+
+    # Line traces (comparison lines) — one per Metric, with dash by Type
+    for met in selected_metrics_b:
+        dmet = combined[combined["Metric"] == met].copy()
+        if dmet.empty:
+            continue
+        for tname, dash in [("Actual", "solid"), ("Forecast (Frozen)", "dash")]:
+            dt = dmet[dmet["Type"] == tname].copy()
+            if dt.empty:
+                continue
+            dt = dt.sort_values("sort_key")
+            fig.add_trace(
+                go.Scatter(
+                    x=dt["FY"],
+                    y=dt["ValueNum"],
+                    mode="lines+markers",
+                    name=f"{met} Line — {tname}",
+                    line=dict(dash=dash),
+                    connectgaps=True,
+                    showlegend=False,  # keep legend clean (bars already label types)
+                )
+            )
 
     fig.update_layout(
+        barmode="group",
+        title=f"{selected_school_b} — Budget Metrics (Actual ≤ {train_through_b} • Forecast → FY{END_FORECAST_FY})",
         height=BASE_HEIGHT_TALLER,
         font=dict(size=BASE_FONT_SIZE),
         legend_font=dict(size=BASE_FONT_SIZE),
         margin=dict(t=70, b=90)
     )
+
+    fig.update_xaxes(
+        categoryorder="array",
+        categoryarray=axis_order,
+        tickangle=45,
+        tickfont=dict(size=BASE_LABEL_FONT_SIZE)
+    )
+
     st.plotly_chart(fig, use_container_width=True)
 
     if show_model_info:
@@ -785,7 +893,7 @@ elif metric_group == "Budget to Enrollment Predicted":
         st.dataframe(pd.DataFrame(model_rows))
 
 # =========================
-# CSAF METRICS + OTHER METRICS (LINE + BEST PRACTICES)
+# CSAF METRICS + OTHER METRICS (BAR) + CSAF BEST PRACTICE
 # =========================
 else:
     school_options = sorted(df_long["Schools"].dropna().unique())
@@ -817,6 +925,21 @@ else:
     filtered["FY Group"] = filtered["Fiscal Year"].str.split().str[0]
     filtered["ValueNum"] = pd.to_numeric(filtered["Value"], errors="coerce")
 
+    def fmt_general(metric, v):
+        if pd.isna(v) or v == 0:
+            return ""
+        if metric in dollar_metrics:
+            return f"${v:,.0f}"
+        if metric == "FB Ratio":
+            return f"{v:.0%}"
+        if metric in ("Liabilities to Assets", "Current Ratio"):
+            return f"{v:.2f}"
+        if metric == "Unrestricted Days COH":
+            return f"{v:,.0f}"
+        return f"{v:,.0f}"
+
+    filtered["TextLabel"] = [fmt_general(m, v) for m, v in zip(filtered["Metric"], filtered["ValueNum"])]
+
     facet_args = {}
     if len(selected_schools) > 1 and len(selected_metrics) > 1:
         facet_args = {"facet_row": "Schools", "facet_col": "Metric", "facet_col_wrap": 2}
@@ -825,21 +948,23 @@ else:
     elif len(selected_metrics) > 1:
         facet_args = {"facet_col": "Metric", "facet_col_wrap": 2}
 
-    # LINE chart (continuous)
-    fig = px.line(
+    fig = px.bar(
         filtered,
-        x="Fiscal Year", y="ValueNum",
+        x="Fiscal Year",
+        y="ValueNum",
         color="FY Group",
-        markers=True,
+        color_discrete_map=fy_color_map,
+        barmode="group",
+        text="TextLabel",
         title=", ".join(selected_metrics) if selected_metrics else "Metrics",
         **facet_args
     )
-    fig.update_traces(connectgaps=True)
 
     fiscal_order = sorted(filtered["Fiscal Year"].unique(), key=sort_fy)
     fig.update_xaxes(categoryorder="array", categoryarray=fiscal_order, tickangle=45, tickfont=dict(size=BASE_LABEL_FONT_SIZE))
+    fig.update_traces(textposition="outside", textfont_size=BASE_TEXT_FONT_SIZE)
 
-    # Best practice for CSAF when one metric is selected
+    # CSAF best practice line only when one CSAF metric is selected
     if metric_group == "CSAF Metrics" and len(selected_metrics) == 1:
         fig = add_best_practice_csaf(fig, selected_metrics[0])
 
