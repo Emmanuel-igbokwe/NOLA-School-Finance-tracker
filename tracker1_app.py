@@ -1250,12 +1250,18 @@ else:
 
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options)
     selected_fy = st.sidebar.multiselect(
-        "📅 Select Fiscal Year + Quarter:", fiscal_options, default=fiscal_options
+        "📅 Select Fiscal Year + Quarter:",
+        fiscal_options,
+        default=fiscal_options
     )
 
-    other_metrics = sorted([m for m in df_long["Metric"].dropna().unique() if m not in csaf_metrics])
+    other_metrics = sorted(
+        [m for m in df_long["Metric"].dropna().unique() if m not in csaf_metrics]
+    )
     selected_metrics = st.sidebar.multiselect(
-        "📊 Select Metric(s):", other_metrics, default=other_metrics[:3]
+        "📊 Select Metric(s):",
+        other_metrics,
+        default=other_metrics[:3]
     )
 
     filtered = df_long[
@@ -1266,6 +1272,7 @@ else:
 
     filtered["ValueNum"] = pd.to_numeric(filtered["Value"], errors="coerce")
     filtered = filtered.dropna(subset=["ValueNum"])
+
     filtered["sort_key"] = filtered["Fiscal Year"].apply(sort_fy)
     filtered = filtered.sort_values("sort_key")
 
@@ -1275,7 +1282,7 @@ else:
 
     filtered["FY Group"] = filtered["Fiscal Year"].astype(str).str.split().str[0]
 
-    # Show $ labels on each bar (bigger)
+    # $ labels on bars
     filtered["Label"] = filtered["ValueNum"].apply(lambda v: f"${v:,.0f}")
 
     fig = px.bar(
@@ -1289,40 +1296,59 @@ else:
         title=f"{selected_school} — Other Metrics"
     )
 
-    # Bigger $ values on bars + thicker bars
+    # FORCE BIG, CORRECT VALUES ON BARS
     fig.update_traces(
+        texttemplate="%{text}",
         textposition="outside",
-        textfont_size=22,
+        textfont=dict(size=26),
         cliponaxis=False,
         width=0.42
     )
 
-    # Format y-axis as dollars too
-    fig.update_yaxes(tickprefix="$", separatethousands=True)
+    # Prevent Plotly from shrinking text
+    fig.update_layout(
+        uniformtext_minsize=26,
+        uniformtext_mode="show"
+    )
 
-    # Make bars look bigger (less whitespace)
+    # Dollar formatting on Y-axis
+    fig.update_yaxes(
+        tickprefix="$",
+        separatethousands=True
+    )
+
+    # Bar spacing (keeps bars thick)
     fig.update_layout(
         bargap=0.12,
         bargroupgap=0.05
     )
 
-    # Move legend to the right so it won't collide with writeup/title
+    # LEGEND COMPLETELY SEPARATED (RIGHT SIDE)
     fig.update_layout(
         legend=dict(
+            title="FY Group",
             orientation="v",
             yanchor="top",
             y=1,
             xanchor="left",
-            x=1.02
+            x=1.18,
+            tracegroupgap=10
         ),
-        margin=dict(r=180, t=80)
+        margin=dict(r=360, t=120)
+    )
+
+    # Clean title placement
+    fig.update_layout(
+        title=dict(x=0.01, y=0.98)
     )
 
     fig.update_xaxes(tickangle=30)
 
-    # Slightly reduce height if it feels too "long" vertically
-    fig = apply_plot_style(fig, height=650)  # or keep CHART_H_TALL if you prefer
+    # Apply your global styling last
+    fig = apply_plot_style(fig, height=650)
+
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
