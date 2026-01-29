@@ -817,19 +817,36 @@ if metric_group == "CSAF Metrics (4-panel)":
     st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
-# 2) CSAF PREDICTED — BAR ONLY
-#    - Actual BLUE, Predicted RED
-#    - Model selector + Auto(min error)
-#    - Bootstrap intervals optional (Option 2)
+# 2) CSAF PREDICTED — BAR ONLY (Freeze + Unfrozen modes)
 # ============================================================
 elif metric_group == "CSAF Predicted":
-    st.markdown("## 🔮 CSAF Predicted (Actual ≤ Freeze • Forecast → Horizon)")
+    st.markdown("## 🔮 CSAF Predicted (Freeze or Unfrozen Forecast)")
 
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options)
     selected_metric = st.sidebar.selectbox("📊 Select CSAF Metric:", csaf_metrics)
 
+    # ---- Forecast mode: Freeze vs Unfrozen ----
+    forecast_mode = st.sidebar.radio(
+        "🧊 Forecast Mode",
+        ["Freeze at selected quarter", "Unfrozen (use all actuals)"],
+        index=0
+    )
+
     all_quarters = sorted(df["Fiscal Year"].dropna().astype(str).unique(), key=sort_fy)
-    freeze_at = st.sidebar.selectbox("🧊 Freeze at:", all_quarters, index=max(0, len(all_quarters) - 1))
+    last_actual_qtr = all_quarters[-1] if all_quarters else None
+
+    if forecast_mode == "Freeze at selected quarter":
+        freeze_at = st.sidebar.selectbox(
+            "🧊 Freeze at:",
+            all_quarters,
+            index=max(0, len(all_quarters) - 1)
+        )
+        train_end_label = freeze_at
+    else:
+        # Unfrozen: use last available actual automatically
+        train_end_label = last_actual_qtr
+        st.sidebar.info(f"Unfrozen mode uses all actuals up to: **{train_end_label}**")
+
     horizon_q = st.sidebar.slider("🔮 Forecast horizon (quarters)", 3, 12, 6)
 
     csaf_model_choice = st.sidebar.selectbox(
@@ -860,12 +877,15 @@ elif metric_group == "CSAF Predicted":
         st.stop()
 
     # ----------------------------
-    # Build history up to freeze
+    # Build history up to training end label
     # ----------------------------
     hist = df[df["Schools"] == selected_school].copy()
     hist["sort_key"] = hist["Fiscal Year"].apply(sort_fy)
-    cut_key = sort_fy(freeze_at)
-    hist = hist[hist["sort_key"].apply(lambda k: k <= cut_key)].sort_values("sort_key")
+    hist = hist.sort_values("sort_key")
+
+    if train_end_label is not None:
+        cut_key = sort_fy(train_end_label)
+        hist = hist[hist["sort_key"].apply(lambda k: k <= cut_key)].sort_values("sort_key")
 
     y = pd.to_numeric(hist[selected_metric], errors="coerce").values.astype(float)
     labels = hist["Fiscal Year"].astype(str).tolist()
@@ -907,7 +927,7 @@ elif metric_group == "CSAF Predicted":
             out.append(f"FY{fy:02d} Q{qq}")
         return out
 
-    future_labels = make_future_labels(freeze_at, horizon_q, q_per_year=3)
+    future_labels = make_future_labels(train_end_label, horizon_q, q_per_year=3)
 
     # ----------------------------
     # Actual series (full for display)
@@ -923,21 +943,26 @@ elif metric_group == "CSAF Predicted":
         "Type": "Actual"
     }).dropna(subset=["Value"])
 
-    # Predicted series
+    # Predicted series label depends on mode
+    pred_label = "Forecast (Frozen)" if forecast_mode == "Freeze at selected quarter" else "Forecast (Unfrozen)"
     pred_part = pd.DataFrame({
         "Period": future_labels,
         "Value": y_future,
-        "Type": "Forecast (Frozen)"
+        "Type": pred_label
     })
 
     combined = pd.concat([actual_part, pred_part], ignore_index=True)
-
-    # Labels on bars
     combined["Label"] = combined["Value"].apply(lambda v: fmt_csaf(selected_metric, v))
 
     # ----------------------------
-    # Build base figure
+    # Plot
     # ----------------------------
+    # Ensure your TYPE_COLOR_CSAF_PRED supports both labels:
+    # TYPE_COLOR_CSAF_PRED = {"Actual":"#1f77b4","Forecast (Frozen)":"#e15759","Forecast (Unfrozen)":"#e15759"}
+    if "Forecast (Unfrozen)" not in TYPE_COLOR_CSAF_PRED:
+        TYPE_COLOR_CSAF_PRED = dict(TYPE_COLOR_CSAF_PRED)
+        TYPE_COLOR_CSAF_PRED["Forecast (Unfrozen)"] = TYPE_COLOR_CSAF_PRED.get("Forecast (Frozen)", "#e15759")
+
     fig = px.bar(
         combined,
         x="Period", y="Value",
@@ -948,77 +973,20 @@ elif metric_group == "CSAF Predicted":
         title=f"{selected_school} — {selected_metric}"
     )
 
-    # Make labels visible & stable (no auto-replacing / shrinking)
+    # Values visible
     fig.update_traces(
         texttemplate="%{text}",
         textposition="outside",
         cliponaxis=False,
         textfont=dict(size=18)
     )
-    fig.update_layout(
-        uniformtext_mode="show",
-        uniformtext_minsize=12
-    )
+    fig.update_layout(uniformtext_mode="show", uniformtext_minsize=12)
 
-    # Match your “Other Metrics” bar feel
-    fig.update_layout(
-        bargap=0.12,
-        bargroupgap=0.06
-    )
+    # Spacing / thickness like your other charts
+    fig.update_layout(bargap=0.12, bargroupgap=0.06)
     fig.update_xaxes(tickangle=30)
 
-    # Legend under title (no collision) + extra top margin
-    fig.update_layout(
-        title=dict(x=0.01, y=0.985),
-        legend=dict(
-            title="Type",
-            orientation="h",
-            yanchor="top",
-            y=0.93,     # below title
-            xanchor="left",
-            x=0.01
-        ),
-        margin=dict(t=140, r=40, b=90, l=60)
-    )
-
-    # ----------------------------
-    # Bootstrap intervals (ADD BEFORE rendering)
-    # ----------------------------
-    if show_intervals:
-        p10, p50, p90 = bootstrap_intervals(
-            y_hist=y, q_hist=q, horizon=horizon_q, model_fn=chosen_fn,
-            season_period=3, n_sims=n_sims, p_lo=p_lo, p_hi=p_hi,
-            is_ratio=is_ratio
-        )
-
-        # Interval band (forecast region)
-        fig.add_trace(go.Scatter(
-            x=future_labels + future_labels[::-1],
-            y=list(p90) + list(p10[::-1]),
-            fill="toself",
-            mode="lines",
-            line=dict(width=0),
-            name=f"Interval P{p_lo}–P{p_hi}",
-            showlegend=True,
-            opacity=0.20
-        ))
-
-        # Median line
-        fig.add_trace(go.Scatter(
-            x=future_labels,
-            y=p50,
-            mode="lines+markers",
-            name="P50 (median)",
-            line=dict(width=2)
-        ))
-
-    # Best-practice line/thresholds etc.
-    fig = add_best_practice_csaf(fig, selected_metric)
-
-    # Height similar to your Other Metrics
-    fig = apply_plot_style(fig, height=700)
-
-    # IMPORTANT: lock legend/title AFTER apply_plot_style (in case it overrides)
+    # Legend under title (no collision)
     fig.update_layout(
         title=dict(x=0.01, y=0.985),
         legend=dict(
@@ -1032,13 +1000,58 @@ elif metric_group == "CSAF Predicted":
         margin=dict(t=140, r=40, b=90, l=60)
     )
 
-    # Render ONCE
+    # Add thresholds / best practice lines
+    fig = add_best_practice_csaf(fig, selected_metric)
+
+    # Bootstrap intervals (add before render)
+    if show_intervals:
+        p10, p50, p90 = bootstrap_intervals(
+            y_hist=y, q_hist=q, horizon=horizon_q, model_fn=chosen_fn,
+            season_period=3, n_sims=n_sims, p_lo=p_lo, p_hi=p_hi,
+            is_ratio=is_ratio
+        )
+
+        fig.add_trace(go.Scatter(
+            x=future_labels + future_labels[::-1],
+            y=list(p90) + list(p10[::-1]),
+            fill="toself",
+            mode="lines",
+            line=dict(width=0),
+            name=f"Interval P{p_lo}–P{p_hi}",
+            showlegend=True,
+            opacity=0.20
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=future_labels,
+            y=p50,
+            mode="lines+markers",
+            name="P50 (median)",
+            line=dict(width=2)
+        ))
+
+    # Final style + lock legend/margins after style
+    fig = apply_plot_style(fig, height=700)
+    fig.update_layout(
+        title=dict(x=0.01, y=0.985),
+        legend=dict(
+            title="Type",
+            orientation="h",
+            yanchor="top",
+            y=0.93,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(t=140, r=40, b=90, l=60)
+    )
+
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown(
         f"""
         **Prediction Details**  
-        - **Freeze at:** {freeze_at}  
+        - **Mode:** {forecast_mode}  
+        - **Training up to:** {train_end_label}  
         - **Horizon:** {horizon_q} quarters  
         - **Model selected:** **{chosen_model}**  
         """
@@ -1436,6 +1449,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
