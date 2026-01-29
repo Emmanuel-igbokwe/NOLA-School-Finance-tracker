@@ -1223,15 +1223,6 @@ elif metric_group == "Budget/Enrollment (Bar)":
 
 # ============================================================
 # 4) BUDGET/ENROLLMENT PREDICTED — BAR ONLY
-#    - select Oct + Feb together
-#    - freeze at any year
-#    - model selector + Auto(min error)
-#    - bootstrap interval optional
-#
-# ✅ KEY FIX:
-#    Feb is NOT forecast independently.
-#    We forecast Oct, then derive Feb from Oct using a robust school-specific
-#    relationship (Feb = a + b*Oct), with safety bounds.
 # ============================================================
 elif metric_group == "Budget/Enrollment Predicted (Bar)":
     st.markdown("## 🔮 Budget / Enrollment Predicted (Bar Only)")
@@ -1240,43 +1231,12 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         st.warning("⚠️ Enrollment dataset not loaded.")
         st.stop()
 
-    # ---------- helpers (local to this block: paste ONCE) ----------
-    def _safe_float(x):
-        try:
-            return float(x)
-        except Exception:
-            return np.nan
-
-    def _build_oct_feb_pairs(_df, school):
-        """Return DF with columns: FY, sort_key, Oct, Feb for valid historical pairs."""
-        oct_hist = _df[(_df["Schools"] == school) & (_df["Metric"] == "October 1 Count")].copy()
-        feb_hist = _df[(_df["Schools"] == school) & (_df["Metric"] == "February 1 Count")].copy()
-
-        oct_hist["FY"] = oct_hist["Fiscal Year"].astype(str)
-        feb_hist["FY"] = feb_hist["Fiscal Year"].astype(str)
-
-        oct_hist["Oct"] = pd.to_numeric(oct_hist["Value"], errors="coerce")
-        feb_hist["Feb"] = pd.to_numeric(feb_hist["Value"], errors="coerce")
-
-        pairs = pd.merge(
-            oct_hist[["FY", "Oct"]],
-            feb_hist[["FY", "Feb"]],
-            on="FY",
-            how="inner"
-        ).dropna()
-
-        pairs = pairs[(pairs["Oct"] > 0) & (pairs["Feb"] > 0)].copy()
-        if pairs.empty:
-            return pairs
-
-        pairs["sort_key"] = pairs["FY"].apply(sort_fy_only)
-        pairs = pairs.sort_values("sort_key")
-        return pairs
-
-    def _estimate_feb_from_oct_ratio(_df, school, fy_label_freeze, ratio_floor=0.80, ratio_cap=1.15):
+    # ---------- helper (local to this block so you only paste once) ----------
+    def _estimate_feb_from_oct_ratio(_df, school, freeze_fy, ratio_floor=0.85, ratio_cap=1.05):
         """
-        If Feb is missing at freeze FY but Oct exists, estimate Feb using RECENT median ratio.
-        Used ONLY to fill the freeze year when Feb missing.
+        If February 1 Count is missing at freeze year but October 1 Count exists,
+        estimate Feb using the RECENT (last 3 years) median Feb/Oct ratio for the same school.
+        Returns None if it can't estimate.
         """
         oct_df = _df[(_df["Schools"] == school) & (_df["Metric"] == "October 1 Count")].copy()
         feb_df = _df[(_df["Schools"] == school) & (_df["Metric"] == "February 1 Count")].copy()
@@ -1288,19 +1248,25 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         feb_df["Feb"] = pd.to_numeric(feb_df["Value"], errors="coerce")
 
         # If Feb exists in freeze year, no fill needed
-        feb_freeze = feb_df[feb_df["FY"] == str(fy_label_freeze)]
+        feb_freeze = feb_df[feb_df["FY"] == str(freeze_fy)]
         if not feb_freeze.empty and np.isfinite(feb_freeze["Feb"].iloc[0]):
             return None
 
         # Need Oct in freeze year
-        oct_freeze = oct_df[oct_df["FY"] == str(fy_label_freeze)]
+        oct_freeze = oct_df[oct_df["FY"] == str(freeze_fy)]
         if oct_freeze.empty:
             return None
         if (not np.isfinite(oct_freeze["Oct"].iloc[0])) or (oct_freeze["Oct"].iloc[0] <= 0):
             return None
 
-        merged = pd.merge(oct_df[["FY", "Oct"]], feb_df[["FY", "Feb"]], on="FY", how="inner").dropna()
-        merged = merged[(merged["Oct"] > 0) & (merged["Feb"] > 0)].copy()
+        merged = pd.merge(
+            oct_df[["FY", "Oct"]],
+            feb_df[["FY", "Feb"]],
+            on="FY",
+            how="inner"
+        ).dropna()
+
+        merged = merged[(merged["Oct"] > 0) & (merged["Feb"] > 0)]
         if merged.empty:
             return None
 
@@ -1313,42 +1279,6 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
 
         oct_val = float(oct_freeze["Oct"].iloc[0])
         return float(oct_val * ratio)
-
-    def _fit_feb_from_oct_model(pairs_df, last_n=5):
-        """
-        Fit robust Feb = a + b*Oct using recent history.
-        Returns (a, b, lo_mult, hi_mult) where lo/hi are safety multipliers vs Oct.
-        Falls back to ratio if too few points.
-        """
-        if pairs_df is None or pairs_df.empty:
-            return None
-
-        recent = pairs_df.tail(max(3, int(last_n))).copy()
-        if len(recent) < 3:
-            return None
-
-        # Robust linear model (Huber): Feb = a + b*Oct
-        X = recent["Oct"].values.reshape(-1, 1).astype(float)
-        yv = recent["Feb"].values.astype(float)
-
-        try:
-            mdl = HuberRegressor()
-            mdl.fit(X, yv)
-            a = float(mdl.intercept_)
-            b = float(mdl.coef_[0])
-        except Exception:
-            # fallback to ratio if Huber fails
-            r = float(np.median(recent["Feb"] / recent["Oct"]))
-            r = float(np.clip(r, 0.80, 1.15))
-            return ("ratio", r, 0.80, 1.15)
-
-        # derive reasonable safety bounds from recent ratios
-        ratios = (recent["Feb"] / recent["Oct"]).values.astype(float)
-        med = float(np.median(ratios))
-        # widen a bit but keep sane
-        lo = float(np.clip(med - 0.10, 0.80, 1.10))
-        hi = float(np.clip(med + 0.10, 0.90, 1.20))
-        return (a, b, lo, hi)
     # -----------------------------------------------------------------------
 
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options_budget)
@@ -1357,7 +1287,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     metrics_all = [m for m in metrics_all if m in df_budget_long["Metric"].unique()]
 
     selected_metrics = st.sidebar.multiselect(
-        "📌 Select Metric(s) to forecast:",
+        "📌 Select Metric(s) to forecast (you can choose Oct + Feb together):",
         metrics_all,
         default=["October 1 Count", "February 1 Count"]
     )
@@ -1365,11 +1295,12 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     freeze_at = st.sidebar.selectbox(
         "🧊 Freeze at:",
         fy_options_budget,
-        index=fy_options_budget.index(fy_label(END_ACTUAL_FY)) if fy_label(END_ACTUAL_FY) in fy_options_budget else len(fy_options_budget) - 1
+        index=fy_options_budget.index(fy_label(END_ACTUAL_FY))
+        if fy_label(END_ACTUAL_FY) in fy_options_budget else len(fy_options_budget) - 1
     )
 
     budget_model_choice = st.sidebar.selectbox(
-        "🧠 Forecast Model (for Oct/Budget/Ratio):",
+        "🧠 Forecast Model:",
         ["Auto (min error)"] + [
             "Ensemble (Seasonal Naive + Drift + Robust Seasonal + Trend×Seasonality)",
             "Seasonal Naive + Drift (recommended baseline)",
@@ -1405,15 +1336,10 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     combined_frames = []
     model_info_rows = []
 
-    # We will store Oct forecasts to derive Feb forecasts later
-    oct_forecast_df = None
-    oct_actual_df = None
-
-    # 1) Forecast everything EXCEPT February 1 Count directly
+    # ===========================
+    # MAIN LOOP: forecast each selected metric
+    # ===========================
     for met in selected_metrics:
-        if met == "February 1 Count":
-            continue  # handled later from Oct
-
         is_ratio = (met == "Budget to Enrollment Ratio")
 
         dh = df_budget_long[
@@ -1430,7 +1356,9 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             continue
 
         y_future, chosen_model, scores, chosen_fn = forecast_timeseries(
-            y=y_hist, q=None, horizon=horizon_y,
+            y=y_hist,
+            q=None,
+            horizon=horizon_y,
             model_choice=budget_model_choice,
             season_period=1,
             is_ratio=is_ratio
@@ -1445,116 +1373,119 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             "Type": "Actual"
         }).dropna(subset=["ValueNum"])
 
+        combined_frames.append(actual_part)
+
+        # ✅ If Feb missing in freeze year, add a freeze-year forecast point
+        if met == "February 1 Count":
+            has_frozen_feb_actual = not actual_part[actual_part["FY"] == str(freeze_at)].empty
+            if not has_frozen_feb_actual:
+                feb_est = _estimate_feb_from_oct_ratio(df_budget_long, selected_school, freeze_at)
+                if feb_est is not None:
+                    combined_frames.append(pd.DataFrame([{
+                        "FY": str(freeze_at),
+                        "ValueNum": float(feb_est),
+                        "Metric": met,
+                        "Type": "Forecast (Frozen)"
+                    }]))
+
         forecast_part = pd.DataFrame({
             "FY": future_years,
             "ValueNum": y_future,
             "Metric": met,
             "Type": "Forecast (Frozen)"
         })
-
-        combined_frames.append(actual_part)
         combined_frames.append(forecast_part)
-
-        if met == "October 1 Count":
-            oct_actual_df = actual_part.copy()
-            oct_forecast_df = forecast_part.copy()
 
         if show_intervals:
             p10, p50, p90 = bootstrap_intervals(
-                y_hist=y_hist, q_hist=None, horizon=horizon_y, model_fn=chosen_fn,
-                season_period=1, n_sims=n_sims, p_lo=p_lo, p_hi=p_hi, is_ratio=is_ratio
+                y_hist=y_hist,
+                q_hist=None,
+                horizon=horizon_y,
+                model_fn=chosen_fn,
+                season_period=1,
+                n_sims=n_sims,
+                p_lo=p_lo,
+                p_hi=p_hi,
+                is_ratio=is_ratio
             )
             st.session_state[f"__intervals__{met}"] = pd.DataFrame({
-                "FY": future_years, "Metric": met, "P10": p10, "P50": p50, "P90": p90
+                "FY": future_years,
+                "Metric": met,
+                "P10": p10,
+                "P50": p50,
+                "P90": p90
             })
 
         if show_model_table:
             st.session_state[f"__scores__{met}"] = scores
 
-    # 2) Always add Feb ACTUAL history up to freeze (if requested)
-    if "February 1 Count" in selected_metrics:
-        feb_hist_block = df_budget_long[
+    # ============================================================
+    # ✅ FIX FY27–FY28 FEB: derive Feb forecasts from Oct forecasts
+    #    (Feb should NOT be forecast independently)
+    # ============================================================
+    if ("October 1 Count" in selected_metrics) and ("February 1 Count" in selected_metrics):
+        oct_hist = df_budget_long[
+            (df_budget_long["Schools"] == selected_school) &
+            (df_budget_long["Metric"] == "October 1 Count")
+        ].copy()
+
+        feb_hist = df_budget_long[
             (df_budget_long["Schools"] == selected_school) &
             (df_budget_long["Metric"] == "February 1 Count")
         ].copy()
-        feb_hist_block["sort_key"] = feb_hist_block["Fiscal Year"].apply(sort_fy_only)
-        feb_hist_block = feb_hist_block[feb_hist_block["sort_key"] <= origin_year].sort_values("sort_key")
 
-        feb_actual_part = pd.DataFrame({
-            "FY": feb_hist_block["Fiscal Year"].astype(str),
-            "ValueNum": pd.to_numeric(feb_hist_block["Value"], errors="coerce"),
-            "Metric": "February 1 Count",
-            "Type": "Actual"
-        }).dropna(subset=["ValueNum"])
+        oct_hist["FY"] = oct_hist["Fiscal Year"].astype(str)
+        feb_hist["FY"] = feb_hist["Fiscal Year"].astype(str)
 
-        combined_frames.append(feb_actual_part)
+        oct_hist["Oct"] = pd.to_numeric(oct_hist["Value"], errors="coerce")
+        feb_hist["Feb"] = pd.to_numeric(feb_hist["Value"], errors="coerce")
 
-        # 2a) If Feb is missing at freeze year but Oct exists, fill freeze-year Feb estimate
-        has_frozen_feb_actual = not feb_actual_part[feb_actual_part["FY"] == str(freeze_at)].empty
-        if not has_frozen_feb_actual and ("October 1 Count" in selected_metrics):
-            feb_est = _estimate_feb_from_oct_ratio(df_budget_long, selected_school, freeze_at, ratio_floor=0.80, ratio_cap=1.15)
-            if feb_est is not None:
-                combined_frames.append(pd.DataFrame([{
-                    "FY": str(freeze_at),
-                    "ValueNum": float(feb_est),
-                    "Metric": "February 1 Count",
-                    "Type": "Forecast (Frozen)"
-                }]))
+        ratio_df = pd.merge(
+            oct_hist[["FY", "Oct"]],
+            feb_hist[["FY", "Feb"]],
+            on="FY",
+            how="inner"
+        ).dropna()
 
-    # 3) Derive Feb FORECASTS from Oct FORECASTS (school-specific robust relationship)
-    if ("February 1 Count" in selected_metrics) and ("October 1 Count" in selected_metrics):
-        if oct_forecast_df is None or oct_forecast_df.empty:
-            st.warning("⚠️ Cannot derive Feb forecast because October forecast is missing.")
-        else:
-            pairs = _build_oct_feb_pairs(df_budget_long, selected_school)
-            model_params = _fit_feb_from_oct_model(pairs, last_n=5)
+        ratio_df = ratio_df[(ratio_df["Oct"] > 0) & (ratio_df["Feb"] > 0)]
 
-            # default safety bounds if model can't fit
-            lo_mult, hi_mult = 0.80, 1.15
+        if not ratio_df.empty:
+            ratio_df["sort_key"] = ratio_df["FY"].apply(sort_fy_only)
+            ratio_df = ratio_df.sort_values("sort_key")
+            recent = ratio_df.tail(3)
+            ratio = float((recent["Feb"] / recent["Oct"]).median())
 
-            if model_params is None:
-                # fallback ratio from recent pairs
-                if pairs is not None and (not pairs.empty):
-                    r = float(np.median(pairs.tail(3)["Feb"] / pairs.tail(3)["Oct"]))
-                    r = float(np.clip(r, lo_mult, hi_mult))
-                    feb_vals = oct_forecast_df["ValueNum"].values.astype(float) * r
-                else:
-                    # ultimate fallback: Feb ~= Oct
-                    feb_vals = oct_forecast_df["ValueNum"].values.astype(float) * 0.98
-            else:
-                if model_params[0] == "ratio":
-                    r = float(model_params[1])
-                    lo_mult, hi_mult = float(model_params[2]), float(model_params[3])
-                    feb_vals = oct_forecast_df["ValueNum"].values.astype(float) * r
-                else:
-                    a, b, lo_mult, hi_mult = model_params
-                    oct_vals = oct_forecast_df["ValueNum"].values.astype(float)
-                    feb_vals = a + b * oct_vals
+            # ✅ tune bounds here if you want Feb closer to Oct
+            ratio = float(np.clip(ratio, 0.90, 1.03))
 
-            # Safety clamp: keep Feb within realistic band vs Oct forecast
-            oct_vals = oct_forecast_df["ValueNum"].values.astype(float)
-            feb_vals = np.clip(feb_vals, lo_mult * oct_vals, hi_mult * oct_vals)
+            tmp = pd.concat(combined_frames, ignore_index=True)
+            tmp["sort_key"] = tmp["FY"].apply(sort_fy_only)
 
-            feb_forecast_part = pd.DataFrame({
-                "FY": oct_forecast_df["FY"].astype(str),
-                "ValueNum": feb_vals.astype(float),
-                "Metric": "February 1 Count",
-                "Type": "Forecast (Frozen)"
-            })
+            oct_fore = tmp[
+                (tmp["Metric"] == "October 1 Count") &
+                (tmp["Type"] == "Forecast (Frozen)")
+            ].sort_values("sort_key")
 
-            # Remove any previously-added Feb forecast rows for future years (keep Feb actuals + freeze fill)
-            new_frames = []
-            for fr in combined_frames:
-                if not {"FY", "Metric", "Type"}.issubset(fr.columns):
-                    new_frames.append(fr)
-                    continue
-                drop_mask = (fr["Metric"] == "February 1 Count") & (fr["Type"] == "Forecast (Frozen)") & (fr["FY"].isin(future_years))
-                new_frames.append(fr.loc[~drop_mask].copy())
+            if not oct_fore.empty:
+                feb_fore = oct_fore.copy()
+                feb_fore["Metric"] = "February 1 Count"
+                feb_fore["ValueNum"] = np.clip(
+                    feb_fore["ValueNum"] * ratio,
+                    0.90 * oct_fore["ValueNum"].values,
+                    1.03 * oct_fore["ValueNum"].values
+                )
 
-            combined_frames = new_frames
-            combined_frames.append(feb_forecast_part)
+                # Remove old Feb forecasts only (keep Feb actuals!)
+                new_frames = []
+                for fr in combined_frames:
+                    if not {"FY", "Metric", "Type"}.issubset(fr.columns):
+                        new_frames.append(fr)
+                        continue
+                    drop_mask = (fr["Metric"] == "February 1 Count") & (fr["Type"] == "Forecast (Frozen)")
+                    new_frames.append(fr.loc[~drop_mask].copy())
 
-            model_info_rows.append({"Metric": "February 1 Count", "Model selected": "Derived from Oct (Robust Feb=a+b·Oct)"})
+                combined_frames = new_frames
+                combined_frames.append(feb_fore)
 
     if not combined_frames:
         st.warning("⚠️ No metrics could be forecast with current selections.")
@@ -1580,7 +1511,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                 marker_color=ENROLL_COLORS.get((met, tname), None),
                 opacity=0.95 if tname == "Actual" else 0.75,
                 text=[fmt_val(met, v) for v in dt["ValueNum"]],
-                textposition="outside",
+                textposition="outside"
             ))
 
     fig.update_layout(
@@ -1607,12 +1538,10 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         margin=dict(t=230, r=40, b=90, l=60)
     )
 
-    # Ensure labels never clip
     fig.update_traces(cliponaxis=False)
-
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("### 🧠 Model Selection / Method")
+    st.markdown("### 🧠 Model Selection")
     st.dataframe(pd.DataFrame(model_info_rows), use_container_width=True)
 
     if show_intervals:
@@ -1634,6 +1563,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                     pd.DataFrame({"Model": list(scores.keys()), "CV MAE": list(scores.values())}).sort_values("CV MAE"),
                     use_container_width=True
                 )
+
 # ============================================================
 # 5) OTHER METRICS — FACETED (4 PANELS PER ROW)
 # ============================================================
@@ -1764,8 +1694,6 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
-
-
 
 
 
