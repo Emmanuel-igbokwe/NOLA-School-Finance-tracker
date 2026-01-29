@@ -228,18 +228,6 @@ def apply_plot_style(fig, height=CHART_H):
     fig.update_xaxes(tickfont=dict(size=AXIS_FONT), showgrid=False)
     fig.update_yaxes(tickfont=dict(size=AXIS_FONT), gridcolor=GRID_CLR)
     return fig
-# ============================================================
-# HELPERS / UTILITIES
-# ============================================================
-
-def sort_fy_only(fy):
-    ...
-
-def fy_label(y):
-    ...
-
-def apply_plot_style(fig, height=650):
-    ...
     
 # 👉 ADD IT HERE 👇
 def enrollment_title_from_metrics(metrics, is_pred=False):
@@ -1597,21 +1585,25 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
 
     # Apply shared style FIRST
     fig = apply_plot_style(fig, height=700)
+dyn_title = enrollment_title_from_metrics(selected_metrics, is_pred=True)
 
     fig.update_layout(
-        title=dict(text=f"{selected_school} — Budget / Enrollment Predicted (Freeze at {freeze_at})", x=0.01, y=0.985),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.28,
-            xanchor="left",
-            x=0.01
-        ),
-        margin=dict(t=230, r=40, b=90, l=60),
-        uniformtext_mode="show",
-        uniformtext_minsize=11
-    )
-
+    title=dict(
+        text=f"{selected_school} — {dyn_title} (Freeze at {freeze_at})",
+        x=0.01,
+        y=0.985
+    ),
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.28,
+        xanchor="left",
+        x=0.01
+    ),
+    margin=dict(t=230, r=40, b=90, l=60),
+    uniformtext_mode="show",
+    uniformtext_minsize=11
+)
     fig.update_traces(cliponaxis=False)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -1749,6 +1741,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
