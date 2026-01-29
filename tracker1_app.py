@@ -927,30 +927,32 @@ elif metric_group == "CSAF Predicted":
             index=max(0, len(all_quarters) - 1)
         )
         train_end_label = freeze_at
-    else:
+        else:
         # Unfrozen: use last available actual automatically
         train_end_label = last_actual_qtr
         st.sidebar.info(f"Unfrozen mode uses all actuals up to: **{train_end_label}**")
 
     horizon_q = st.sidebar.slider("🔮 Forecast horizon (quarters)", 3, 12, 6)
 
-   csaf_model_choice = st.sidebar.selectbox(
-    "🧠 CSAF Forecast Model:",
-    ["Auto (min error)"] + [
-        "Ensemble (Seasonal Naive + Drift + Robust Seasonal + Trend×Seasonality)",
-        "Seasonal Naive + Drift (recommended baseline)",
-        "Seasonal Naive (same quarter last year)",
-        "Robust Seasonal Regression (Huber + quarter dummies, log1p)",
-        "Trend × Seasonal Index (linear trend on de-seasonalized)",
-        "HGBR Lag + Trend + Season (recommended)",
-        "Neural MLP Lag + Season",
-        "Ridge Lag + Season",
-    ],
-    index=0
-)
+    csaf_model_choice = st.sidebar.selectbox(
+        "🧠 CSAF Forecast Model:",
+        ["Auto (min error)"] + [
+            "Ensemble (Seasonal Naive + Drift + Robust Seasonal + Trend×Seasonality)",
+            "Seasonal Naive + Drift (recommended baseline)",
+            "Seasonal Naive (same quarter last year)",
+            "Robust Seasonal Regression (Huber + quarter dummies, log1p)",
+            "Trend × Seasonal Index (linear trend on de-seasonalized)",
+            "HGBR Lag + Trend + Season (recommended)",
+            "Neural MLP Lag + Season",
+            "Ridge Lag + Season",
+        ],
+        index=0
+    )
 
     # Interval selections BEFORE prediction
-    show_intervals = st.sidebar.checkbox("📊 Show interval forecast (Bootstrap P10–P50–P90)", value=False)
+    show_intervals = st.sidebar.checkbox(
+        "📊 Show interval forecast (Bootstrap P10–P50–P90)", value=False
+    )
     n_sims = st.sidebar.slider("🎲 Bootstrap simulations", 200, 800, 300) if show_intervals else 300
     p_lo = st.sidebar.slider("📉 Lower percentile", 5, 25, 10) if show_intervals else 10
     p_hi = st.sidebar.slider("📈 Upper percentile", 75, 95, 90) if show_intervals else 90
@@ -961,7 +963,6 @@ elif metric_group == "CSAF Predicted":
     if not run:
         st.info("Choose options in the sidebar, then click **Run CSAF Prediction**.")
         st.stop()
-
     # ----------------------------
     # Build history up to training end label
     # ----------------------------
@@ -1536,6 +1537,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
