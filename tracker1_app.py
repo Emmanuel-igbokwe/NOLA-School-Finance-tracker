@@ -1384,7 +1384,34 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         bargroupgap=BARGROUPGAP,
     )
     fig.update_xaxes(categoryorder="array", categoryarray=FY22_TO_FY28, tickangle=0)
-    fig = apply_plot_style(fig, height=CHART_H_TALL)
+       # Apply shared style FIRST
+    fig = apply_plot_style(fig, height=700)
+
+    # 🔒 Lock legend ABOVE title + bars (prevents collision)
+    fig.update_layout(
+        title=dict(
+            text=f"{selected_school} — Budget / Enrollment Predicted",
+            x=0.01,
+            y=0.985
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.28,          # 🔼 long legend text needs more space
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(
+            t=230,           # 🔼 extra headroom
+            r=40,
+            b=90,
+            l=60
+        )
+    )
+
+    # Ensure labels never clip
+    fig.update_traces(cliponaxis=False)
+
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### 🧠 Model Selection")
@@ -1540,6 +1567,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
