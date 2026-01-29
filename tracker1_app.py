@@ -1052,6 +1052,7 @@ elif metric_group == "CSAF Predicted":
     if "Forecast (Unfrozen)" not in TYPE_COLOR_CSAF_PRED:
         TYPE_COLOR_CSAF_PRED = dict(TYPE_COLOR_CSAF_PRED)
         TYPE_COLOR_CSAF_PRED["Forecast (Unfrozen)"] = TYPE_COLOR_CSAF_PRED.get("Forecast (Frozen)", "#e15759")
+      # Build chart
     fig = px.bar(
         combined,
         x="Period", y="Value",
@@ -1062,38 +1063,23 @@ elif metric_group == "CSAF Predicted":
         title=f"{selected_school} — {selected_metric}"
     )
 
-    # Values visible
+    # Value labels visible
     fig.update_traces(
         texttemplate="%{text}",
         textposition="outside",
         cliponaxis=False,
         textfont=dict(size=18)
     )
-
     fig.update_layout(uniformtext_mode="show", uniformtext_minsize=12)
 
-    # Spacing / thickness like other charts
+    # Spacing / x ticks
     fig.update_layout(bargap=0.12, bargroupgap=0.06)
     fig.update_xaxes(tickangle=30)
 
-    # Legend ABOVE bars
-    fig.update_layout(
-        title=dict(x=0.01, y=0.985),
-        legend=dict(
-            title="Type",
-            orientation="h",
-            yanchor="bottom",
-            y=1.18,
-            xanchor="left",
-            x=0.01
-        ),
-        margin=dict(t=180, r=40, b=90, l=60)
-    )
-
-    # Threshold / best-practice lines
+    # Best-practice thresholds (before style is OK)
     fig = add_best_practice_csaf(fig, selected_metric)
 
-    # Bootstrap intervals
+    # Bootstrap intervals (before style is OK)
     if show_intervals:
         p10, p50, p90 = bootstrap_intervals(
             y_hist=y, q_hist=q, horizon=horizon_q, model_fn=chosen_fn,
@@ -1120,29 +1106,27 @@ elif metric_group == "CSAF Predicted":
             line=dict(width=2)
         ))
 
-    # Final style (do this ONCE, at the end)
+    # ✅ Apply style FIRST (this may reset legend/margins)
     fig = apply_plot_style(fig, height=700)
 
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown(
-        f"""
-        **Prediction Details**  
-        - **Mode:** {forecast_mode}  
-        - **Training up to:** {train_end_label}  
-        - **Horizon:** {horizon_q} quarters  
-        - **Model selected:** **{chosen_model}**  
-        """
+    # ✅ Then LOCK legend + margins (prevents collision permanently)
+    fig.update_layout(
+        title=dict(text=f"{selected_school} — {selected_metric}", x=0.01, y=0.985),
+        legend=dict(
+            title="Type",
+            orientation="h",
+            yanchor="bottom",
+            y=1.25,          # 🔼 higher to avoid tall bars/labels
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(t=210, r=40, b=90, l=60)
     )
 
-    if show_model_table:
-        st.dataframe(
-            pd.DataFrame({
-                "Model": list(scores.keys()),
-                "CV MAE": list(scores.values())
-            }).sort_values("CV MAE"),
-            use_container_width=True
-        )
+    # Ensure nothing clips
+    fig.update_traces(cliponaxis=False)
+
+    st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # 3) BUDGET/ENROLLMENT (ACTUAL) — BAR ONLY
@@ -1556,6 +1540,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
