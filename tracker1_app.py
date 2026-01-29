@@ -910,7 +910,7 @@ elif metric_group == "CSAF Predicted":
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options)
     selected_metric = st.sidebar.selectbox("📊 Select CSAF Metric:", csaf_metrics)
 
-    # ---- Forecast mode: Freeze vs Unfrozen ----
+       # ---- Forecast mode: Freeze vs Unfrozen ----
     forecast_mode = st.sidebar.radio(
         "🧊 Forecast Mode",
         ["Freeze at selected quarter", "Unfrozen (use all actuals)"],
@@ -927,10 +927,12 @@ elif metric_group == "CSAF Predicted":
             index=max(0, len(all_quarters) - 1)
         )
         train_end_label = freeze_at
-        else:
+    else:
         # Unfrozen: use last available actual automatically
         train_end_label = last_actual_qtr
-        st.sidebar.info(f"Unfrozen mode uses all actuals up to: **{train_end_label}**")
+        st.sidebar.info(
+            f"Unfrozen mode uses all actuals up to: **{train_end_label}**"
+        )
 
     horizon_q = st.sidebar.slider("🔮 Forecast horizon (quarters)", 3, 12, 6)
 
@@ -963,6 +965,7 @@ elif metric_group == "CSAF Predicted":
     if not run:
         st.info("Choose options in the sidebar, then click **Run CSAF Prediction**.")
         st.stop()
+
     # ----------------------------
     # Build history up to training end label
     # ----------------------------
@@ -1537,6 +1540,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
