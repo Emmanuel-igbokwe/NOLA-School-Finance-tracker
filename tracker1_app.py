@@ -1282,7 +1282,7 @@ else:
 
     filtered["FY Group"] = filtered["Fiscal Year"].astype(str).str.split().str[0]
 
-    # $ labels on bars
+    # Dollar labels on bars
     filtered["Label"] = filtered["ValueNum"].apply(lambda v: f"${v:,.0f}")
 
     fig = px.bar(
@@ -1296,18 +1296,18 @@ else:
         title=f"{selected_school} — Other Metrics"
     )
 
-    # FORCE BIG, CORRECT VALUES ON BARS
+    # Reduced value label size ONLY
     fig.update_traces(
         texttemplate="%{text}",
         textposition="outside",
-        textfont=dict(size=26),
+        textfont=dict(size=16),   # 👈 reduced size
         cliponaxis=False,
         width=0.42
     )
 
     # Prevent Plotly from shrinking text
     fig.update_layout(
-        uniformtext_minsize=26,
+        uniformtext_minsize=14,
         uniformtext_mode="show"
     )
 
@@ -1317,13 +1317,13 @@ else:
         separatethousands=True
     )
 
-    # Bar spacing (keeps bars thick)
+    # Bar spacing (unchanged)
     fig.update_layout(
         bargap=0.12,
         bargroupgap=0.05
     )
 
-    # LEGEND COMPLETELY SEPARATED (RIGHT SIDE)
+    # Legend fully separated on the right
     fig.update_layout(
         legend=dict(
             title="FY Group",
@@ -1337,18 +1337,14 @@ else:
         margin=dict(r=360, t=120)
     )
 
-    # Clean title placement
     fig.update_layout(
         title=dict(x=0.01, y=0.98)
     )
 
     fig.update_xaxes(tickangle=30)
 
-    # Apply your global styling last
     fig = apply_plot_style(fig, height=650)
-
     st.plotly_chart(fig, use_container_width=True)
-
 
 
 
