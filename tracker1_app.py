@@ -926,20 +926,78 @@ elif metric_group == "CSAF Predicted":
     combined = pd.concat([actual_part, pred_part], ignore_index=True)
     combined["Label"] = combined["Value"].apply(lambda v: fmt_csaf(selected_metric, v))
 
-    fig = px.bar(
-        combined,
-        x="Period", y="Value",
-        color="Type",
-        barmode="group",
-        text="Label",
-        color_discrete_map=TYPE_COLOR_CSAF_PRED,
-        title=f"{selected_school} — {selected_metric}"
-    )
-    fig.update_traces(textposition="outside", textfont_size=18)
-    fig.update_layout(bargap=BARGAP, bargroupgap=BARGROUPGAP)
-    fig.update_xaxes(tickangle=30)
-    fig = add_best_practice_csaf(fig, selected_metric)
-    fig = apply_plot_style(fig, height=CHART_H_TALL)
+   fig = px.bar(
+    combined,
+    x="Period", y="Value",
+    color="Type",
+    barmode="group",
+    text="Label",
+    color_discrete_map=TYPE_COLOR_CSAF_PRED,
+    title=f"{selected_school} — {selected_metric}"
+)
+
+# ----------------------------
+# Make values more visible
+# ----------------------------
+fig.update_traces(
+    texttemplate="%{text}",
+    textposition="outside",
+    cliponaxis=False,
+    textfont=dict(size=18)
+)
+
+fig.update_layout(
+    uniformtext_mode="show",
+    uniformtext_minsize=12
+)
+
+# ----------------------------
+# Bar spacing (matches Other Metrics)
+# ----------------------------
+fig.update_layout(
+    bargap=0.12,
+    bargroupgap=0.06
+)
+
+fig.update_xaxes(tickangle=30)
+
+# ----------------------------
+# Legend BELOW title (no collision)
+# ----------------------------
+fig.update_layout(
+    title=dict(x=0.01, y=0.985),
+    legend=dict(
+        title="Type",
+        orientation="h",
+        yanchor="top",
+        y=0.93,      # below title
+        xanchor="left",
+        x=0.01
+    ),
+    margin=dict(t=140, r=40, b=90, l=60)
+)
+
+# ----------------------------
+# Match height & style to Other Metrics
+# ----------------------------
+fig = add_best_practice_csaf(fig, selected_metric)
+fig = apply_plot_style(fig, height=700)
+
+# Lock legend/title AFTER style (important)
+fig.update_layout(
+    title=dict(x=0.01, y=0.985),
+    legend=dict(
+        title="Type",
+        orientation="h",
+        yanchor="top",
+        y=0.93,
+        xanchor="left",
+        x=0.01
+    ),
+    margin=dict(t=140, r=40, b=90, l=60)
+)
+
+st.plotly_chart(fig, use_container_width=True)
 
     # bootstrap intervals (P10/P50/P90) shown as a band behind forecast bars
     if show_intervals:
@@ -1372,5 +1430,6 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
