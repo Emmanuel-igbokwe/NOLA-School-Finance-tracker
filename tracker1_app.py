@@ -228,42 +228,24 @@ def apply_plot_style(fig, height=CHART_H):
     fig.update_xaxes(tickfont=dict(size=AXIS_FONT), showgrid=False)
     fig.update_yaxes(tickfont=dict(size=AXIS_FONT), gridcolor=GRID_CLR)
     return fig
-    
-# 👉 ADD IT HERE 👇
-def enrollment_title_from_metrics(metrics, is_pred=False):
-    has_oct = "October 1 Count" in metrics
-    has_feb = "February 1 Count" in metrics
-    has_budget = "Budgetted" in metrics
-    has_ratio = "Budget to Enrollment Ratio" in metrics
-
-    parts = []
-    if has_oct or has_feb:
-        parts.append("Enrollment")
-    if has_budget:
-        parts.append("Budget")
-    if has_ratio:
-        parts.append("Ratios")
-
-    label = " & ".join(parts) if parts else "Metrics"
-    suffix = "Predicted" if is_pred else "Actuals"
-    return f"{label} ({suffix})"
 
 # ============================================================
 # CSAF BEST PRACTICE (NO “BEST PRACTICE” WORDING — ONLY NUMBER)
 # ============================================================
-csaf_metrics = [
-    "FB Ratio",
-    "Liabilities to Assets",
-    "Current Ratio",
-    "Unrestricted Days COH"
-]
-
+csaf_metrics = ["FB Ratio", "Liabilities to Assets", "Current Ratio", "Unrestricted Days COH"]
 csaf_desc = {
     "FB Ratio": "Fund Balance Ratio: Unrestricted Fund Balance / Total Exp.",
     "Liabilities to Assets": "Liabilities to Assets Ratio: Total Liabilities / Total Assets",
     "Current Ratio": "Current Ratio: Current Assets / Current Liabilities",
     "Unrestricted Days COH": "Unrestricted Cash on Hand: Cash / ((Exp.-Depreciation)/365)",
 }
+csaf_best = {
+    "FB Ratio": {"threshold": 0.10, "direction": "gte"},
+    "Liabilities to Assets": {"threshold": 0.90, "direction": "lte"},
+    "Current Ratio": {"threshold": 1.50, "direction": "gte"},
+    "Unrestricted Days COH": {"threshold": 60.0, "direction": "gte"},
+}
+
 def add_best_practice_csaf(fig, metric, row=None, col=None):
     if metric not in csaf_best:
         return fig
@@ -1203,27 +1185,31 @@ elif metric_group == "Budget/Enrollment (Bar)":
             text=[fmt_enroll(met, v) for v in sub["ValueNum"]],
             textposition="outside",
         ))
-
-    # ✅ Dynamic title based on selected_metrics
-    dyn_title = enrollment_title_from_metrics(selected_metrics, is_pred=False)
-
     fig.update_layout(
         title=dict(
-            text=f"{selected_school} — {dyn_title}",
+            text=f"{selected_school} — Budget & Enrollment (Actuals)",
             x=0.01,
-            y=0.985
+            y=0.98
         ),
+
         barmode="group",
         bargap=BARGAP,
         bargroupgap=BARGROUPGAP,
+
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.18,
+            y=1.18,          # 🔼 pushes legend above plot
             xanchor="left",
             x=0.01
         ),
-        margin=dict(t=175, r=40, b=80, l=60)
+
+        margin=dict(
+            t=170,           # 🔼 extra headroom for title + legend
+            r=40,
+            b=80,
+            l=60
+        )
     )
 
     fig.update_xaxes(
@@ -1233,15 +1219,13 @@ elif metric_group == "Budget/Enrollment (Bar)":
     )
 
     fig = apply_plot_style(fig, height=CHART_H_TALL)
-    fig.update_traces(cliponaxis=False)
-
     st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # 4) BUDGET/ENROLLMENT PREDICTED — BAR ONLY (DROP-IN, STABLE)
 #    ✅ Enrollment forecasting is NOT ML:
-#       - October is conservative (damped + bounded growth)
-#       - February is derived from October using adaptive school retention (Feb/Oct)
+#       - October is conservative (bounded growth)
+#       - February is derived from October using school retention (Feb/Oct)
 #    ✅ Works well when freezing at FY25
 #    ✅ Legend/title collision fixed
 # ============================================================
@@ -1273,17 +1257,16 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         index=fy_options_budget.index(fy_label(END_ACTUAL_FY)) if fy_label(END_ACTUAL_FY) in fy_options_budget else len(fy_options_budget) - 1
     )
 
+    # Enrollment realism controls (IMPORTANT)
     st.sidebar.markdown("### ⚙️ Enrollment realism controls")
-    # These default values are intentionally conservative
-    max_oct_growth = st.sidebar.slider("Max Oct YoY growth", 0.00, 0.15, 0.04, 0.01)   # +4%
-    max_oct_drop   = st.sidebar.slider("Max Oct YoY drop",   0.00, 0.15, 0.03, 0.01)   # -3%
+    max_oct_growth = st.sidebar.slider("Max Oct YoY growth", 0.00, 0.12, 0.03, 0.01)   # default +3%
+    max_oct_drop   = st.sidebar.slider("Max Oct YoY drop",   0.00, 0.12, 0.02, 0.01)   # default -2%
 
-    # Retention: Feb is usually close to Oct, but allow some movement
-    ret_lo = st.sidebar.slider("Min Feb/Oct retention", 0.70, 1.00, 0.90, 0.01)
-    ret_hi = st.sidebar.slider("Max Feb/Oct retention", 0.80, 1.10, 1.03, 0.01)
+    ret_lo = st.sidebar.slider("Min Feb/Oct retention", 0.70, 1.00, 0.92, 0.01)
+    ret_hi = st.sidebar.slider("Max Feb/Oct retention", 0.80, 1.10, 1.02, 0.01)
 
     show_intervals = st.sidebar.checkbox("📊 Show simple bands (±1.5% on counts)", value=False)
-    show_model_table = st.sidebar.checkbox("Show method summary table", value=True)
+    show_model_table = st.sidebar.checkbox("Show model info table", value=True)
 
     run = st.sidebar.button("▶ Run Budget/Enrollment Prediction")
     if not run:
@@ -1312,44 +1295,34 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         if len(y) < 3:
             return 0.0
         prev = y[:-1]
-        nxt = y[1:]
+        nxt  = y[1:]
         mask = (prev > 0) & np.isfinite(prev) & np.isfinite(nxt)
         if mask.sum() < 2:
             return 0.0
         pct = (nxt[mask] - prev[mask]) / prev[mask]
         return float(np.median(pct))
 
-    def _forecast_oct_conservative(oct_hist_vals, horizon, max_g, max_d):
+    def _forecast_oct_history(oct_hist_vals, horizon, max_g, max_d):
         """
         Conservative October forecast:
-        - Uses robust median YoY change
-        - Dampens growth over horizon (prevents runaway)
-        - Clips YoY to [-max_d, +max_g]
+        - uses robust median YoY % change
+        - clips to [-max_d, +max_g]
+        - iterates forward
         """
         y = np.asarray(oct_hist_vals, dtype=float)
         last = float(y[-1])
-
-        g0 = _robust_pct_change(y)
-        g0 = float(np.clip(g0, -max_d, max_g))
-
+        g = _robust_pct_change(y)
+        g = float(np.clip(g, -max_d, max_g))
         out = []
         cur = last
-
-        # damping: reduce growth impact as we go further out (keeps FY27/28 sane)
-        # example: [1.00, 0.85, 0.72, 0.60] for 4-year horizon
-        damp = np.linspace(1.0, 0.60, horizon)
-
-        for i in range(horizon):
-            g = float(np.clip(g0 * damp[i], -max_d, max_g))
+        for _ in range(horizon):
             cur = float(cur * (1.0 + g))
             out.append(cur)
+        return np.asarray(out, dtype=float), g
 
-        return np.asarray(out, dtype=float), g0
-
-    def _estimate_retention_ratio(freeze_fy_label, ret_lo, ret_hi):
+    def _estimate_retention_ratio(freeze_fy_label):
         """
         School-specific Feb/Oct retention using last 3 valid paired years up to freeze.
-        Then lightly nudges toward 0.97 to avoid extreme ratios.
         """
         oct_df = _get_series("October 1 Count", freeze_fy_label)
         feb_df = _get_series("February 1 Count", freeze_fy_label)
@@ -1370,13 +1343,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             return None
 
         merged = merged.sort_values("sort_key").tail(3)  # last 3 paired years
-        r_raw = float(np.median(merged["ValueNum_Feb"].values / merged["ValueNum_Oct"].values))
-
-        # nudge toward typical retention so a single weird year doesn't dominate
-        # 70% weight on recent school value, 30% on typical
-        r_typ = 0.97
-        ratio = 0.70 * r_raw + 0.30 * r_typ
-
+        ratio = float(np.median(merged["ValueNum_Feb"].values / merged["ValueNum_Oct"].values))
         ratio = float(np.clip(ratio, ret_lo, ret_hi))
         return ratio
 
@@ -1407,28 +1374,29 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     oct_hist_df = _get_series("October 1 Count", freeze_at) if need_oct else pd.DataFrame()
     feb_hist_df = _get_series("February 1 Count", freeze_at) if need_feb else pd.DataFrame()
 
-    retention = _estimate_retention_ratio(freeze_at, ret_lo, ret_hi) if need_feb else None
+    # Retention ratio (school-specific)
+    retention = _estimate_retention_ratio(freeze_at) if need_feb else None
 
+    # Forecast Oct (conservative)
     oct_future = None
     oct_growth_used = None
-
-    # ---------- October ----------
     if need_oct:
         if len(oct_hist_df) < 3:
             st.warning("⚠️ Not enough October history (need ≥ 3) for stable forecast.")
         else:
             oct_vals = oct_hist_df["ValueNum"].values.astype(float)
-            oct_future, oct_growth_used = _forecast_oct_conservative(
+            oct_future, oct_growth_used = _forecast_oct_history(
                 oct_vals, horizon=horizon_y, max_g=max_oct_growth, max_d=max_oct_drop
             )
 
             model_info_rows.append({
                 "Metric": "October 1 Count",
-                "Method": "Conservative damped YoY",
-                "YoY base used": f"{oct_growth_used*100:.2f}%",
-                "Notes": f"Damped over horizon; clipped to [-{max_oct_drop*100:.0f}%, +{max_oct_growth*100:.0f}%]"
+                "Method": "Conservative bounded YoY",
+                "YoY % used": f"{oct_growth_used*100:.2f}%",
+                "Notes": f"Clipped to [-{max_oct_drop*100:.0f}%, +{max_oct_growth*100:.0f}%]"
             })
 
+            # Actual
             combined_frames.append(pd.DataFrame({
                 "FY": oct_hist_df["FY"],
                 "ValueNum": oct_hist_df["ValueNum"],
@@ -1436,6 +1404,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                 "Type": "Actual"
             }))
 
+            # Forecast
             combined_frames.append(pd.DataFrame({
                 "FY": future_years,
                 "ValueNum": oct_future,
@@ -1443,7 +1412,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                 "Type": "Forecast (Frozen)"
             }))
 
-    # ---------- February (derived) ----------
+    # Forecast Feb (derived from Oct using retention)
     if need_feb:
         if retention is None:
             st.warning("⚠️ Could not compute Feb/Oct retention (insufficient paired history). Feb forecast disabled.")
@@ -1451,11 +1420,11 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             model_info_rows.append({
                 "Metric": "February 1 Count",
                 "Method": "Derived from October",
-                "YoY base used": "",
+                "YoY % used": "",
                 "Notes": f"Feb = Oct × retention, retention={retention:.3f} (clipped {ret_lo:.2f}–{ret_hi:.2f})"
             })
 
-            # Feb actuals
+            # Actual Feb
             if not feb_hist_df.empty:
                 combined_frames.append(pd.DataFrame({
                     "FY": feb_hist_df["FY"],
@@ -1464,7 +1433,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                     "Type": "Actual"
                 }))
 
-            # Fill freeze-year Feb if missing (only if Oct exists)
+            # If freeze year Feb is missing, estimate it from freeze-year Oct (if available)
             freeze_fy_str = str(freeze_at)
             has_feb_freeze = (not feb_hist_df.empty) and (freeze_fy_str in feb_hist_df["FY"].values)
 
@@ -1479,23 +1448,24 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                         "Type": "Forecast (Frozen)"
                     }]))
 
-            # Future Feb from future Oct (if Oct forecast exists)
+            # Future Feb derived from future Oct
             if need_oct and (oct_future is not None):
                 feb_future = (oct_future * retention).astype(float)
 
+                # Optional simple band (counts only) for quick sanity
                 if show_intervals:
-                    band = 0.015
+                    band = 0.015  # ±1.5%
                     combined_frames.append(pd.DataFrame({
                         "FY": future_years,
                         "ValueNum": feb_future * (1 - band),
-                        "Metric": "February 1 Count",
-                        "Type": "Band (Low)"
+                        "Metric": "February 1 Count (P10)",
+                        "Type": "Band"
                     }))
                     combined_frames.append(pd.DataFrame({
                         "FY": future_years,
                         "ValueNum": feb_future * (1 + band),
-                        "Metric": "February 1 Count",
-                        "Type": "Band (High)"
+                        "Metric": "February 1 Count (P90)",
+                        "Type": "Band"
                     }))
 
                 combined_frames.append(pd.DataFrame({
@@ -1506,7 +1476,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                 }))
 
     # --------------------------
-    # Non-enrollment metrics (Budget + Ratio)
+    # Non-enrollment metrics (optional): keep your existing forecast engine
     # --------------------------
     for met in selected_metrics:
         if met in ["October 1 Count", "February 1 Count"]:
@@ -1520,6 +1490,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
 
         y_hist = dh["ValueNum"].values.astype(float)
 
+        # Use your existing forecast engine for these (stable enough yearly)
         y_future, chosen_model, scores, chosen_fn = forecast_timeseries(
             y=y_hist, q=None, horizon=horizon_y,
             model_choice="Seasonal Naive + Drift (recommended baseline)",
@@ -1530,7 +1501,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         model_info_rows.append({
             "Metric": met,
             "Method": "Time-series",
-            "YoY base used": "",
+            "YoY % used": "",
             "Notes": f"Model: {chosen_model}"
         })
 
@@ -1560,8 +1531,12 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     # --------------------------
     fig = go.Figure()
 
-    # Only chart the selected metrics (ignore bands)
-    for met in selected_metrics:
+    # Only chart the selected base metrics (ignore P10/P90 bands unless you want them)
+    metrics_to_plot = []
+    for m in selected_metrics:
+        metrics_to_plot.append(m)
+
+    for met in metrics_to_plot:
         for tname in ["Actual", "Forecast (Frozen)"]:
             dt = combined[(combined["Metric"] == met) & (combined["Type"] == tname)].sort_values("sort_key")
             if dt.empty:
@@ -1583,38 +1558,33 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     )
     fig.update_xaxes(categoryorder="array", categoryarray=FY22_TO_FY28, tickangle=0)
 
-   # Apply shared style FIRST
-fig = apply_plot_style(fig, height=700)
+    # Apply shared style FIRST
+    fig = apply_plot_style(fig, height=700)
 
-# ✅ Dynamic title
-dyn_title = enrollment_title_from_metrics(selected_metrics, is_pred=True)
+    # Lock legend ABOVE title + bars (prevents collision)
+    fig.update_layout(
+        title=dict(text=f"{selected_school} — Budget / Enrollment Predicted (Freeze at {freeze_at})", x=0.01, y=0.985),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.28,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(t=230, r=40, b=90, l=60),
+        uniformtext_mode="show",
+        uniformtext_minsize=11
+    )
 
-# 🔒 Lock legend ABOVE title + bars
-fig.update_layout(
-    title=dict(
-        text=f"{selected_school} — {dyn_title} (Freeze at {freeze_at})",
-        x=0.01,
-        y=0.985
-    ),
-    legend=dict(
-        orientation="h",
-        yanchor="bottom",
-        y=1.28,
-        xanchor="left",
-        x=0.01
-    ),
-    margin=dict(
-        t=230,
-        r=40,
-        b=90,
-        l=60
-    ),
-    uniformtext_mode="show",
-    uniformtext_minsize=11
-)
+    fig.update_traces(cliponaxis=False)
+    st.plotly_chart(fig, use_container_width=True)
 
-fig.update_traces(cliponaxis=False)
-st.plotly_chart(fig, use_container_width=True)
+    # --------------------------
+    # Model info (so you can explain it to CFOs)
+    # --------------------------
+    if show_model_table and model_info_rows:
+        st.markdown("### 🧠 Forecast Method Summary")
+        st.dataframe(pd.DataFrame(model_info_rows), use_container_width=True)
 
 # ============================================================
 # 5) OTHER METRICS — FACETED (4 PANELS PER ROW)
@@ -1746,11 +1716,6 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
-
-
-
-
-
 
 
 
