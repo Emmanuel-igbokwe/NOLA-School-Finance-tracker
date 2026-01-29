@@ -1275,10 +1275,24 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         if merged.empty:
             return None
 
-        ratio = float((merged["Feb"] / merged["Oct"]).median())
-        ratio = float(np.clip(ratio, ratio_floor, ratio_cap))
+      # --- use recent years only (last 3 with valid data) ---
+merged["sort_key"] = merged["FY"].apply(sort_fy_only)
+merged = merged.sort_values("sort_key")
 
-        return float(oct_freeze["Oct"].iloc[0] * ratio)
+recent = merged.tail(3)  # last 3 years only
+ratio = float((recent["Feb"] / recent["Oct"]).median())
+
+# --- adaptive floor: Feb should not drop too far below Oct ---
+adaptive_floor = 0.85
+adaptive_cap = 1.05
+
+ratio = float(np.clip(ratio, adaptive_floor, adaptive_cap))
+
+oct_val = float(oct_freeze["Oct"].iloc[0])
+feb_est = oct_val * ratio
+
+return float(feb_est)
+
 
     # -----------------------------------------------------------------------
 
@@ -1620,6 +1634,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
