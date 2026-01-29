@@ -1249,10 +1249,14 @@ else:
     st.markdown("## 📌 Other Metrics (Actuals)")
 
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options)
-    selected_fy = st.sidebar.multiselect("📅 Select Fiscal Year + Quarter:", fiscal_options, default=fiscal_options)
+    selected_fy = st.sidebar.multiselect(
+        "📅 Select Fiscal Year + Quarter:", fiscal_options, default=fiscal_options
+    )
 
     other_metrics = sorted([m for m in df_long["Metric"].dropna().unique() if m not in csaf_metrics])
-    selected_metrics = st.sidebar.multiselect("📊 Select Metric(s):", other_metrics, default=other_metrics[:3])
+    selected_metrics = st.sidebar.multiselect(
+        "📊 Select Metric(s):", other_metrics, default=other_metrics[:3]
+    )
 
     filtered = df_long[
         (df_long["Schools"] == selected_school) &
@@ -1270,7 +1274,9 @@ else:
         st.stop()
 
     filtered["FY Group"] = filtered["Fiscal Year"].astype(str).str.split().str[0]
-    filtered["Label"] = filtered["ValueNum"].apply(lambda v: f"{v:,.0f}")
+
+    # Show $ labels on each bar (bigger)
+    filtered["Label"] = filtered["ValueNum"].apply(lambda v: f"${v:,.0f}")
 
     fig = px.bar(
         filtered,
@@ -1282,9 +1288,41 @@ else:
         text="Label",
         title=f"{selected_school} — Other Metrics"
     )
-    fig.update_traces(textposition="outside", textfont_size=16)
-    fig.update_layout(bargap=BARGAP, bargroupgap=BARGROUPGAP)
+
+    # Bigger $ values on bars + thicker bars
+    fig.update_traces(
+        textposition="outside",
+        textfont_size=22,
+        cliponaxis=False,
+        width=0.42
+    )
+
+    # Format y-axis as dollars too
+    fig.update_yaxes(tickprefix="$", separatethousands=True)
+
+    # Make bars look bigger (less whitespace)
+    fig.update_layout(
+        bargap=0.12,
+        bargroupgap=0.05
+    )
+
+    # Move legend to the right so it won't collide with writeup/title
+    fig.update_layout(
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        ),
+        margin=dict(r=180, t=80)
+    )
+
     fig.update_xaxes(tickangle=30)
-    fig = apply_plot_style(fig, height=CHART_H_TALL)
+
+    # Slightly reduce height if it feels too "long" vertically
+    fig = apply_plot_style(fig, height=650)  # or keep CHART_H_TALL if you prefer
     st.plotly_chart(fig, use_container_width=True)
+
+
 
