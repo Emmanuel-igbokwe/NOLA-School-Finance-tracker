@@ -1583,11 +1583,14 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     )
     fig.update_xaxes(categoryorder="array", categoryarray=FY22_TO_FY28, tickangle=0)
 
-    # Apply shared style FIRST
-    fig = apply_plot_style(fig, height=700)
+   # Apply shared style FIRST
+fig = apply_plot_style(fig, height=700)
+
+# ✅ Dynamic title
 dyn_title = enrollment_title_from_metrics(selected_metrics, is_pred=True)
 
-    fig.update_layout(
+# 🔒 Lock legend ABOVE title + bars
+fig.update_layout(
     title=dict(
         text=f"{selected_school} — {dyn_title} (Freeze at {freeze_at})",
         x=0.01,
@@ -1600,16 +1603,18 @@ dyn_title = enrollment_title_from_metrics(selected_metrics, is_pred=True)
         xanchor="left",
         x=0.01
     ),
-    margin=dict(t=230, r=40, b=90, l=60),
+    margin=dict(
+        t=230,
+        r=40,
+        b=90,
+        l=60
+    ),
     uniformtext_mode="show",
     uniformtext_minsize=11
 )
-    fig.update_traces(cliponaxis=False)
-    st.plotly_chart(fig, use_container_width=True)
 
-    if show_model_table and model_info_rows:
-        st.markdown("### 🧠 Forecast Method Summary")
-        st.dataframe(pd.DataFrame(model_info_rows), use_container_width=True)
+fig.update_traces(cliponaxis=False)
+st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # 5) OTHER METRICS — FACETED (4 PANELS PER ROW)
@@ -1741,6 +1746,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
