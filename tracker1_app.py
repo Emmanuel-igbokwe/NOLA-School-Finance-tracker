@@ -368,8 +368,13 @@ except Exception as e:
     st.warning(f"⚠️ Could not load '{fy26_path}' / sheet 'FY26 Student enrollment': {e}")
 
 # ============================================================
-# FORECAST ENGINE (ROBUST + ADVANCED + NO FEATURE-MISMATCH ERRORS)
+# FORECAST ENGINE (ROBUST + ADVANCED + IMPROVED BASELINES)
+#  - Adds Seasonal Naive + Drift (baseline actually moves)
+#  - Fair CV scoring (1-step ahead)
+#  - Auto lag depth + metric-aware growth guard
+#  - Weighted ensemble (more stable than median)
 # ============================================================
+
 def _safe_log1p(y):
     y = np.asarray(y, dtype=float)
     y = np.clip(y, 0, None)
@@ -427,18 +432,25 @@ def _seasonal_index(y, q_int):
     return idx
 
 def _tscv_mae(fit_predict_fn, y, min_train=5, splits=3):
+    """
+    1-step-ahead TimeSeries CV MAE (fair scoring, avoids punishing ML models).
+    """
     y = np.asarray(y, dtype=float)
     n = len(y)
     if n < max(min_train + 2, 6):
         return np.inf
+
     n_splits = min(splits, max(2, n - min_train))
     tscv = TimeSeriesSplit(n_splits=n_splits)
     maes = []
+
     for tr_idx, te_idx in tscv.split(np.arange(n)):
         if len(tr_idx) < min_train:
             continue
-        yhat = fit_predict_fn(tr_idx, te_idx)
-        maes.append(mean_absolute_error(y[te_idx], yhat))
+        te0 = np.array([te_idx[0]], dtype=int)   # score 1-step ahead only
+        yhat = fit_predict_fn(tr_idx, te0)
+        maes.append(mean_absolute_error(y[te0], yhat))
+
     return float(np.mean(maes)) if maes else np.inf
 
 def _make_lag_features(y, q_int=None, n_lags=4, use_time_poly=True, use_season=True, season_period=3):
@@ -467,12 +479,17 @@ def _make_lag_features(y, q_int=None, n_lags=4, use_time_poly=True, use_season=T
 
 def _iterative_forecast_supervised(
     model, y_hist, q_hist, horizon,
-    n_lags=4, use_time_poly=True, use_season=True,
-    log_target=True, season_period=3
+    n_lags=None, use_time_poly=True, use_season=True,
+    log_target=True, season_period=3,
+    is_ratio=False
 ):
     y_hist = np.asarray(y_hist, dtype=float)
     y_hist = np.clip(y_hist, 0, None)
     last = float(y_hist[-1])
+
+    # Auto lag depth prevents overfit on short series
+    if n_lags is None:
+        n_lags = min(6, max(3, len(y_hist) // 3))
 
     Xtr, ytr = _make_lag_features(
         y_hist, q_hist,
@@ -509,6 +526,7 @@ def _iterative_forecast_supervised(
         if use_season and q_all is not None:
             q_next = int(((q_all[-1] % season_period) + 1))
             parts.append(_quarter_dummies(np.array([q_next], dtype=int), season_period=season_period))
+
         Xf = np.hstack(parts)
 
         yhat_fit = model.predict(Xf)[0]
@@ -519,10 +537,17 @@ def _iterative_forecast_supervised(
         if q_all is not None:
             q_all = np.append(q_all, q_next)
 
+    # Metric-aware growth guard (ratios should not swing like dollars)
+    if is_ratio:
+        max_up, max_down = 1.15, 0.85
+    else:
+        max_up, max_down = 1.30, 0.70
+
     hist_max = float(np.nanmax(np.clip(y_hist, 0, None))) if len(y_hist) else 1.0
     cap = max(hist_max * 1.6, last * 1.5, 1.0)
-    preds = _guard_growth(preds, last, max_up=1.25, max_down=0.75, lower=0.0, upper=cap)
-    return preds
+
+    preds = _guard_growth(preds, last, max_up=max_up, max_down=max_down, lower=0.0, upper=cap)
+    return np.array(preds, dtype=float)
 
 def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", season_period=3, is_ratio=False):
     y = np.asarray(y, dtype=float)
@@ -533,6 +558,9 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
     if q is None:
         season_period = 1
 
+    # ----------------------------
+    # Baselines
+    # ----------------------------
     def seasonal_naive(y_hist, q_hist, h):
         y_hist = np.asarray(y_hist, dtype=float)
         preds = []
@@ -547,6 +575,43 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
                 y_hist = np.append(y_hist, y_hist[-1])
         return np.array(preds, dtype=float)
 
+    def seasonal_naive_drift(y_hist, q_hist, h):
+        """
+        Same quarter last year + damped year-over-year drift.
+        Makes baseline "move" while respecting seasonality.
+        """
+        y_hist = np.asarray(y_hist, dtype=float)
+        sp = season_period
+
+        # Base seasonal naive path
+        base = []
+        y_tmp = y_hist.copy()
+        for _ in range(h):
+            idx = len(y_tmp) - sp
+            val = float(y_tmp[idx]) if idx >= 0 else float(y_tmp[-1])
+            base.append(val)
+            y_tmp = np.append(y_tmp, val)
+        base = np.asarray(base, dtype=float)
+
+        # Robust drift: median YoY change (recent)
+        if len(y_hist) > sp + 1:
+            diffs = y_hist[sp:] - y_hist[:-sp]
+            recent = diffs[-min(len(diffs), 6):]
+            med = np.nanmedian(recent)
+            drift = float(med) if np.isfinite(med) else 0.0
+        else:
+            drift = 0.0
+
+        damp = np.linspace(1.0, 0.6, h)
+        out = base + drift * damp
+        out = np.clip(out, 0, None)
+        if is_ratio:
+            out = np.clip(out, 0.0, 1.5)
+        return out
+
+    # ----------------------------
+    # Robust seasonal regression
+    # ----------------------------
     def robust_seasonal_regression(y_hist, q_hist, h):
         ylog = _safe_log1p(y_hist)
         t = np.arange(len(ylog)).reshape(-1, 1).astype(float)
@@ -567,6 +632,9 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
             Xf = np.hstack([tf, _quarter_dummies(qf, season_period=season_period)])
         return _safe_expm1(mdl.predict(Xf))
 
+    # ----------------------------
+    # Trend × Seasonal Index
+    # ----------------------------
     def trend_times_seasonal_index(y_hist, q_hist, h):
         y_hist = np.asarray(y_hist, dtype=float)
         t = np.arange(len(y_hist)).reshape(-1, 1).astype(float)
@@ -593,22 +661,29 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
             preds.append(float(base[i] * idx_map.get(int(q_last), 1.0)))
         return np.asarray(preds, dtype=float)
 
+    # ----------------------------
+    # Ensemble (weighted)
+    # ----------------------------
     def ensemble_3(y_hist, q_hist, h):
-        p1 = seasonal_naive(y_hist, q_hist, h)
+        p1 = seasonal_naive_drift(y_hist, q_hist, h)
         p2 = robust_seasonal_regression(y_hist, q_hist, h)
         p3 = trend_times_seasonal_index(y_hist, q_hist, h)
-        return np.median(np.vstack([p1, p2, p3]), axis=0)
+        w = np.array([0.55, 0.30, 0.15], dtype=float)
+        return np.average(np.vstack([p1, p2, p3]), axis=0, weights=w)
 
+    # ----------------------------
+    # ML models (supervised lag)
+    # ----------------------------
     def hgbr_lag(y_hist, q_hist, h):
         mdl = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.08, max_iter=900, random_state=42)
         return _iterative_forecast_supervised(
             mdl, y_hist, q_hist, h,
-            n_lags=4, use_time_poly=True, use_season=(q_hist is not None),
-            log_target=True, season_period=season_period
+            n_lags=None, use_time_poly=True, use_season=(q_hist is not None),
+            log_target=True, season_period=season_period,
+            is_ratio=is_ratio
         )
 
     def neural_mlp_lag(y_hist, q_hist, h):
-        # SAFER MLP: no early_stopping (prevents small-sample ValueError)
         mdl = make_pipeline(
             StandardScaler(),
             MLPRegressor(
@@ -621,20 +696,23 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
         )
         return _iterative_forecast_supervised(
             mdl, y_hist, q_hist, h,
-            n_lags=4, use_time_poly=True, use_season=(q_hist is not None),
-            log_target=True, season_period=season_period
+            n_lags=None, use_time_poly=True, use_season=(q_hist is not None),
+            log_target=True, season_period=season_period,
+            is_ratio=is_ratio
         )
 
     def ridge_lag(y_hist, q_hist, h):
         mdl = Ridge(alpha=1.0)
         return _iterative_forecast_supervised(
             mdl, y_hist, q_hist, h,
-            n_lags=4, use_time_poly=True, use_season=(q_hist is not None),
-            log_target=True, season_period=season_period
+            n_lags=None, use_time_poly=True, use_season=(q_hist is not None),
+            log_target=True, season_period=season_period,
+            is_ratio=is_ratio
         )
 
     models = {
-        "Ensemble (Seasonal Naive + Robust Seasonal + Trend×Seasonality)": ensemble_3,
+        "Ensemble (Seasonal Naive + Drift + Robust Seasonal + Trend×Seasonality)": ensemble_3,
+        "Seasonal Naive + Drift (recommended baseline)": seasonal_naive_drift,
         "Seasonal Naive (same quarter last year)": seasonal_naive,
         "Robust Seasonal Regression (Huber + quarter dummies, log1p)": robust_seasonal_regression,
         "Trend × Seasonal Index (linear trend on de-seasonalized)": trend_times_seasonal_index,
@@ -648,8 +726,8 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
         def fit_pred(tr_idx, te_idx):
             y_tr = y[tr_idx]
             q_tr = None if q is None else np.asarray(q, dtype=int)[tr_idx]
-            h = len(te_idx)
-            pred = fn(y_tr, q_tr, h)
+            pred = fn(y_tr, q_tr, 1)  # 1-step ahead for fair scoring
+            pred = np.asarray(pred, dtype=float)
             if is_ratio:
                 pred = np.clip(pred, 0.0, 1.5)
             return pred
@@ -676,10 +754,17 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
     if is_ratio:
         y_future = np.clip(y_future, 0.0, 1.5)
 
+    # final guard (metric-aware)
+    if is_ratio:
+        max_up, max_down = 1.15, 0.85
+    else:
+        max_up, max_down = 1.30, 0.70
+
     last = float(y[-1])
     hist_max = float(np.nanmax(y)) if len(y) else 1.0
     cap = max(hist_max * 1.6, last * 1.5, 1.0)
-    y_future = _guard_growth(y_future, last, max_up=1.25, max_down=0.75, lower=0.0, upper=cap)
+
+    y_future = _guard_growth(y_future, last, max_up=max_up, max_down=max_down, lower=0.0, upper=cap)
     if is_ratio:
         y_future = np.clip(y_future, 0.0, 1.5)
 
@@ -849,19 +934,20 @@ elif metric_group == "CSAF Predicted":
 
     horizon_q = st.sidebar.slider("🔮 Forecast horizon (quarters)", 3, 12, 6)
 
-    csaf_model_choice = st.sidebar.selectbox(
-        "🧠 CSAF Forecast Model:",
-        ["Auto (min error)"] + [
-            "Ensemble (Seasonal Naive + Robust Seasonal + Trend×Seasonality)",
-            "Seasonal Naive (same quarter last year)",
-            "Robust Seasonal Regression (Huber + quarter dummies, log1p)",
-            "Trend × Seasonal Index (linear trend on de-seasonalized)",
-            "HGBR Lag + Trend + Season (recommended)",
-            "Neural MLP Lag + Season",
-            "Ridge Lag + Season",
-        ],
-        index=0
-    )
+   csaf_model_choice = st.sidebar.selectbox(
+    "🧠 CSAF Forecast Model:",
+    ["Auto (min error)"] + [
+        "Ensemble (Seasonal Naive + Drift + Robust Seasonal + Trend×Seasonality)",
+        "Seasonal Naive + Drift (recommended baseline)",
+        "Seasonal Naive (same quarter last year)",
+        "Robust Seasonal Regression (Huber + quarter dummies, log1p)",
+        "Trend × Seasonal Index (linear trend on de-seasonalized)",
+        "HGBR Lag + Trend + Season (recommended)",
+        "Neural MLP Lag + Season",
+        "Ridge Lag + Season",
+    ],
+    index=0
+)
 
     # Interval selections BEFORE prediction
     show_intervals = st.sidebar.checkbox("📊 Show interval forecast (Bootstrap P10–P50–P90)", value=False)
@@ -1165,7 +1251,8 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     budget_model_choice = st.sidebar.selectbox(
         "🧠 Forecast Model:",
         ["Auto (min error)"] + [
-            "Ensemble (Seasonal Naive + Robust Seasonal + Trend×Seasonality)",
+            "Ensemble (Seasonal Naive + Drift + Robust Seasonal + Trend×Seasonality)",
+            "Seasonal Naive + Drift (recommended baseline)",
             "Seasonal Naive (same quarter last year)",
             "Robust Seasonal Regression (Huber + quarter dummies, log1p)",
             "Trend × Seasonal Index (linear trend on de-seasonalized)",
@@ -1449,6 +1536,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
