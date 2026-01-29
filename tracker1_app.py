@@ -1227,6 +1227,10 @@ elif metric_group == "Budget/Enrollment (Bar)":
 #    - freeze at any year
 #    - model selector + Auto(min error)
 #    - bootstrap interval optional
+#    ✅ FIXES:
+#      1) If FY freeze year is FY26 and Feb is missing, estimate FY26 Feb from Oct via median Feb/Oct ratio
+#      2) Legend/title collision handled (style first, then lock legend + margins)
+#      3) Indentation cleaned
 # ============================================================
 elif metric_group == "Budget/Enrollment Predicted (Bar)":
     st.markdown("## 🔮 Budget / Enrollment Predicted (Bar Only)")
@@ -1234,6 +1238,49 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     if df_budget_long.empty:
         st.warning("⚠️ Enrollment dataset not loaded.")
         st.stop()
+
+    # ---------- helper (local to this block so you only paste once) ----------
+    def _estimate_feb_from_oct_ratio(_df, school, freeze_fy, ratio_floor=0.70, ratio_cap=1.10):
+        """
+        If February 1 Count is missing at freeze year but October 1 Count exists,
+        estimate Feb using historical median Feb/Oct ratio for the same school.
+        Returns None if it can't estimate.
+        """
+        oct_df = _df[(_df["Schools"] == school) & (_df["Metric"] == "October 1 Count")].copy()
+        feb_df = _df[(_df["Schools"] == school) & (_df["Metric"] == "February 1 Count")].copy()
+
+        oct_df["FY"] = oct_df["Fiscal Year"].astype(str)
+        feb_df["FY"] = feb_df["Fiscal Year"].astype(str)
+
+        oct_df["Oct"] = pd.to_numeric(oct_df["Value"], errors="coerce")
+        feb_df["Feb"] = pd.to_numeric(feb_df["Value"], errors="coerce")
+
+        # if Feb exists in freeze year, no fill needed
+        feb_freeze = feb_df[feb_df["FY"] == str(freeze_fy)]
+        if not feb_freeze.empty and np.isfinite(feb_freeze["Feb"].iloc[0]):
+            return None
+
+        # need Oct in freeze year
+        oct_freeze = oct_df[oct_df["FY"] == str(freeze_fy)]
+        if oct_freeze.empty or (not np.isfinite(oct_freeze["Oct"].iloc[0])) or oct_freeze["Oct"].iloc[0] <= 0:
+            return None
+
+        merged = pd.merge(
+            oct_df[["FY", "Oct"]],
+            feb_df[["FY", "Feb"]],
+            on="FY",
+            how="inner"
+        ).dropna()
+        merged = merged[(merged["Oct"] > 0) & (merged["Feb"] > 0)]
+        if merged.empty:
+            return None
+
+        ratio = float((merged["Feb"] / merged["Oct"]).median())
+        ratio = float(np.clip(ratio, ratio_floor, ratio_cap))
+
+        return float(oct_freeze["Oct"].iloc[0] * ratio)
+
+    # -----------------------------------------------------------------------
 
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options_budget)
 
@@ -1249,7 +1296,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     freeze_at = st.sidebar.selectbox(
         "🧊 Freeze at:",
         fy_options_budget,
-        index=fy_options_budget.index(fy_label(END_ACTUAL_FY)) if fy_label(END_ACTUAL_FY) in fy_options_budget else len(fy_options_budget)-1
+        index=fy_options_budget.index(fy_label(END_ACTUAL_FY)) if fy_label(END_ACTUAL_FY) in fy_options_budget else len(fy_options_budget) - 1
     )
 
     budget_model_choice = st.sidebar.selectbox(
@@ -1322,7 +1369,20 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             "Type": "Actual"
         }).dropna(subset=["ValueNum"])
 
-        # forecast
+        # ✅ NEW: If Feb is missing in the freeze year, add a forecast row for the freeze year
+        if met == "February 1 Count":
+            has_frozen_feb_actual = not actual_part[actual_part["FY"] == str(freeze_at)].empty
+            if not has_frozen_feb_actual:
+                feb_est = _estimate_feb_from_oct_ratio(df_budget_long, selected_school, freeze_at)
+                if feb_est is not None:
+                    combined_frames.append(pd.DataFrame([{
+                        "FY": str(freeze_at),
+                        "ValueNum": float(feb_est),
+                        "Metric": met,
+                        "Type": "Forecast (Frozen)"
+                    }]))
+
+        # forecast (starts AFTER freeze year: FY27+ if freeze is FY26)
         forecast_part = pd.DataFrame({
             "FY": future_years,
             "ValueNum": y_future,
@@ -1356,12 +1416,12 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     combined = pd.concat(combined_frames, ignore_index=True)
     combined["sort_key"] = combined["FY"].apply(sort_fy_only)
 
-    def fmt_val(met, v):
-        return f"{v:.0%}" if met == "Budget to Enrollment Ratio" else f"{v:,.0f}"
+    def fmt_val(met_name, v):
+        return f"{v:.0%}" if met_name == "Budget to Enrollment Ratio" else f"{v:,.0f}"
 
     fig = go.Figure()
 
-    # bar only, but colored by (metric, type) to differentiate Oct/Feb actual/pred
+    # bar only, colored by (metric, type) to differentiate Oct/Feb actual/pred
     for met in selected_metrics:
         for tname in ["Actual", "Forecast (Frozen)"]:
             dt = combined[(combined["Metric"] == met) & (combined["Type"] == tname)].sort_values("sort_key")
@@ -1384,29 +1444,21 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         bargroupgap=BARGROUPGAP,
     )
     fig.update_xaxes(categoryorder="array", categoryarray=FY22_TO_FY28, tickangle=0)
-       # Apply shared style FIRST
+
+    # Apply shared style FIRST
     fig = apply_plot_style(fig, height=700)
 
     # 🔒 Lock legend ABOVE title + bars (prevents collision)
     fig.update_layout(
-        title=dict(
-            text=f"{selected_school} — Budget / Enrollment Predicted",
-            x=0.01,
-            y=0.985
-        ),
+        title=dict(text=f"{selected_school} — Budget / Enrollment Predicted", x=0.01, y=0.985),
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.28,          # 🔼 long legend text needs more space
+            y=1.28,
             xanchor="left",
             x=0.01
         ),
-        margin=dict(
-            t=230,           # 🔼 extra headroom
-            r=40,
-            b=90,
-            l=60
-        )
+        margin=dict(t=230, r=40, b=90, l=60)
     )
 
     # Ensure labels never clip
@@ -1436,6 +1488,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                     pd.DataFrame({"Model": list(scores.keys()), "CV MAE": list(scores.values())}).sort_values("CV MAE"),
                     use_container_width=True
                 )
+
 
 # ============================================================
 # 5) OTHER METRICS — FACETED (4 PANELS PER ROW)
@@ -1567,6 +1620,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
