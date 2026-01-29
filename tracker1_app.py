@@ -228,24 +228,62 @@ def apply_plot_style(fig, height=CHART_H):
     fig.update_xaxes(tickfont=dict(size=AXIS_FONT), showgrid=False)
     fig.update_yaxes(tickfont=dict(size=AXIS_FONT), gridcolor=GRID_CLR)
     return fig
+# ============================================================
+# HELPERS / UTILITIES
+# ============================================================
+
+def sort_fy_only(fy):
+    ...
+
+def fy_label(y):
+    ...
+
+def apply_plot_style(fig, height=650):
+    ...
+
+# 👉 ADD IT HERE 👇
+def enrollment_title_from_metrics(metrics, is_pred=False):
+    has_oct = "October 1 Count" in metrics
+    has_feb = "February 1 Count" in metrics
+    has_budget = "Budgetted" in metrics
+    has_ratio = "Budget to Enrollment Ratio" in metrics
+
+    parts = []
+
+    if has_oct or has_feb:
+        parts.append("Enrollment")
+
+    if has_budget:
+        parts.append("Budget")
+
+    if has_ratio:
+        parts.append("Ratios")
+
+    label = " & ".join(parts) if parts else "Metrics"
+    suffix = "Predicted" if is_pred else "Actuals"
+    return f"{label} ({suffix})"
+# ✅ TEMP TEST (remove after you confirm)
+st.write(enrollment_title_from_metrics(
+    ["October 1 Count", "February 1 Count"],
+    is_pred=False
+))
 
 # ============================================================
 # CSAF BEST PRACTICE (NO “BEST PRACTICE” WORDING — ONLY NUMBER)
 # ============================================================
-csaf_metrics = ["FB Ratio", "Liabilities to Assets", "Current Ratio", "Unrestricted Days COH"]
+csaf_metrics = [
+    "FB Ratio",
+    "Liabilities to Assets",
+    "Current Ratio",
+    "Unrestricted Days COH"
+]
+
 csaf_desc = {
     "FB Ratio": "Fund Balance Ratio: Unrestricted Fund Balance / Total Exp.",
     "Liabilities to Assets": "Liabilities to Assets Ratio: Total Liabilities / Total Assets",
     "Current Ratio": "Current Ratio: Current Assets / Current Liabilities",
     "Unrestricted Days COH": "Unrestricted Cash on Hand: Cash / ((Exp.-Depreciation)/365)",
 }
-csaf_best = {
-    "FB Ratio": {"threshold": 0.10, "direction": "gte"},
-    "Liabilities to Assets": {"threshold": 0.90, "direction": "lte"},
-    "Current Ratio": {"threshold": 1.50, "direction": "gte"},
-    "Unrestricted Days COH": {"threshold": 60.0, "direction": "gte"},
-}
-
 def add_best_practice_csaf(fig, metric, row=None, col=None):
     if metric not in csaf_best:
         return fig
@@ -1132,7 +1170,6 @@ elif metric_group == "CSAF Predicted":
 # 3) BUDGET/ENROLLMENT (ACTUAL) — BAR ONLY
 # ============================================================
 elif metric_group == "Budget/Enrollment (Bar)":
-    st.markdown("## 📊 Budget / Enrollment (Actuals — Bar Only)")
 
     if df_budget_long.empty:
         st.warning("⚠️ Enrollment dataset not loaded.")
@@ -1149,6 +1186,10 @@ elif metric_group == "Budget/Enrollment (Bar)":
         metrics_all,
         default=["October 1 Count", "February 1 Count"]
     )
+
+    # ✅ Dynamic section title (Actuals)
+    title_text = enrollment_title_from_metrics(selected_metrics, is_pred=False)
+    st.markdown(f"## 📊 {title_text} — Bar Only")
 
     selected_fy = st.sidebar.multiselect(
         "📅 Select Fiscal Years:",
@@ -1185,27 +1226,26 @@ elif metric_group == "Budget/Enrollment (Bar)":
             text=[fmt_enroll(met, v) for v in sub["ValueNum"]],
             textposition="outside",
         ))
+
     fig.update_layout(
         title=dict(
-            text=f"{selected_school} — Budget & Enrollment (Actuals)",
+            # ✅ Dynamic chart title
+            text=f"{selected_school} — {title_text}",
             x=0.01,
             y=0.98
         ),
-
         barmode="group",
         bargap=BARGAP,
         bargroupgap=BARGROUPGAP,
-
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.18,          # 🔼 pushes legend above plot
+            y=1.18,
             xanchor="left",
             x=0.01
         ),
-
         margin=dict(
-            t=170,           # 🔼 extra headroom for title + legend
+            t=170,
             r=40,
             b=80,
             l=60
@@ -1716,6 +1756,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
