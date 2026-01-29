@@ -1072,23 +1072,36 @@ elif metric_group == "CSAF Predicted":
     )
     fig.update_layout(uniformtext_mode="show", uniformtext_minsize=12)
 
-    # Spacing / thickness like your other charts
-    fig.update_layout(bargap=0.12, bargroupgap=0.06)
-    fig.update_xaxes(tickangle=30)
+# Spacing / thickness like your other charts
+fig.update_layout(bargap=0.12, bargroupgap=0.06)
+fig.update_xaxes(tickangle=30)
 
-    # Legend under title (no collision)
-    fig.update_layout(
-        title=dict(x=0.01, y=0.985),
-        legend=dict(
-            title="Type",
-            orientation="h",
-            yanchor="top",
-            y=0.93,
-            xanchor="left",
-            x=0.01
-        ),
-        margin=dict(t=140, r=40, b=90, l=60)
+# Legend ABOVE bars with extra headroom
+fig.update_layout(
+    title=dict(x=0.01, y=0.985),
+
+    legend=dict(
+        title="Type",
+        orientation="h",
+        yanchor="bottom",
+        y=1.18,          # 🔼 push legend UP
+        xanchor="left",
+        x=0.01
+    ),
+
+    margin=dict(
+        t=180,           # 🔼 more top margin so legend never overlaps
+        r=40,
+        b=90,
+        l=60
     )
+)
+
+# Ensure value labels are not clipped
+fig.update_traces(
+    textposition="outside",
+    cliponaxis=False
+)
 
     # Add thresholds / best practice lines
     fig = add_best_practice_csaf(fig, selected_metric)
@@ -1540,6 +1553,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
