@@ -1201,42 +1201,41 @@ elif metric_group == "Budget/Enrollment (Bar)":
             text=[fmt_enroll(met, v) for v in sub["ValueNum"]],
             textposition="outside",
         ))
+    fig.update_layout(
+        title=dict(
+            text=f"{selected_school} — Budget & Enrollment (Actuals)",
+            x=0.01,
+            y=0.98
+        ),
 
-  fig.update_layout(
-    title=dict(
-        text=f"{selected_school} — Budget & Enrollment (Actuals)",
-        x=0.01,
-        y=0.98
-    ),
+        barmode="group",
+        bargap=BARGAP,
+        bargroupgap=BARGROUPGAP,
 
-    barmode="group",
-    bargap=BARGAP,
-    bargroupgap=BARGROUPGAP,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.18,          # 🔼 pushes legend above plot
+            xanchor="left",
+            x=0.01
+        ),
 
-    legend=dict(
-        orientation="h",
-        yanchor="bottom",
-        y=1.18,          # 🔼 pushes legend above plot
-        xanchor="left",
-        x=0.01
-    ),
-
-    margin=dict(
-        t=170,           # 🔼 extra headroom for title + legend
-        r=40,
-        b=80,
-        l=60
+        margin=dict(
+            t=170,           # 🔼 extra headroom for title + legend
+            r=40,
+            b=80,
+            l=60
+        )
     )
-)
 
-  fig.update_xaxes(
-    categoryorder="array",
-    categoryarray=sorted(d["Fiscal Year"].unique(), key=sort_fy_only),
-    tickangle=0
-)
+    fig.update_xaxes(
+        categoryorder="array",
+        categoryarray=sorted(d["Fiscal Year"].unique(), key=sort_fy_only),
+        tickangle=0
+    )
 
-fig = apply_plot_style(fig, height=CHART_H_TALL)
-st.plotly_chart(fig, use_container_width=True)
+    fig = apply_plot_style(fig, height=CHART_H_TALL)
+    st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # 4) BUDGET/ENROLLMENT PREDICTED — BAR ONLY
@@ -1557,6 +1556,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
