@@ -1258,11 +1258,15 @@ else:
     other_metrics = sorted(
         [m for m in df_long["Metric"].dropna().unique() if m not in csaf_metrics]
     )
-    selected_metrics = st.sidebar.multiselect(
-        "📊 Select Metric(s):",
-        other_metrics,
-        default=other_metrics[:4]
-    )
+   DEFAULT_METRIC = "Current Assets"
+
+default_metrics = [DEFAULT_METRIC] if DEFAULT_METRIC in other_metrics else [other_metrics[0]]
+
+selected_metrics = st.sidebar.multiselect(
+    "📊 Select Metric(s):",
+    other_metrics,
+    default=default_metrics
+)
 
     filtered = df_long[
         (df_long["Schools"] == selected_school) &
@@ -1362,3 +1366,4 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
