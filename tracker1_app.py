@@ -1243,7 +1243,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                 )
 
 # ============================================================
-# 5) OTHER METRICS — SIMPLE BAR (FACETED)
+# 5) OTHER METRICS — FACETED (4 PANELS PER ROW)
 # ============================================================
 else:
     st.markdown("## 📌 Other Metrics (Actuals)")
@@ -1261,7 +1261,7 @@ else:
     selected_metrics = st.sidebar.multiselect(
         "📊 Select Metric(s):",
         other_metrics,
-        default=other_metrics[:1]
+        default=other_metrics[:4]
     )
 
     filtered = df_long[
@@ -1283,11 +1283,20 @@ else:
     filtered["FY Group"] = filtered["Fiscal Year"].astype(str).str.split().str[0]
     filtered["Label"] = filtered["ValueNum"].apply(lambda v: f"${v:,.0f}")
 
-    # Build dynamic metric title
+    # Dynamic title: show metric names (truncate if many)
     if len(selected_metrics) == 1:
         metric_title = selected_metrics[0]
-    else:
+    elif len(selected_metrics) <= 4:
         metric_title = " | ".join(selected_metrics)
+    else:
+        metric_title = f"{len(selected_metrics)} Metrics Selected"
+
+    # ---- 4-panels-per-row sizing (prevents glitches) ----
+    import math
+    n_metrics = max(1, len(selected_metrics))
+    rows = math.ceil(n_metrics / 4)
+    # Comfortable height per row + header space
+    fig_height = 360 * rows + 320
 
     fig = px.bar(
         filtered,
@@ -1296,61 +1305,60 @@ else:
         color="FY Group",
         color_discrete_map=fy_color_map,
         barmode="group",
-        facet_col="Metric",                 # 🔥 SIDE-BY-SIDE METRICS
-        facet_col_spacing=0.08,
+        facet_col="Metric",
+        facet_col_wrap=4,              # ✅ 4 panels per row
+        facet_col_spacing=0.06,
+        facet_row_spacing=0.12,
         text="Label",
         title=f"{selected_school} — {metric_title}"
     )
 
-    # Clean facet titles
-    fig.for_each_annotation(
-        lambda a: a.update(text=a.text.split("=")[-1])
-    )
+    # Clean facet titles ("Metric=XYZ" -> "XYZ")
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
 
-    # Value labels (reduced size)
+    # Values on bars (reduced size so they don’t clutter)
     fig.update_traces(
         texttemplate="%{text}",
         textposition="outside",
-        textfont=dict(size=14),
+        textfont=dict(size=13),
         cliponaxis=False,
         width=0.42
     )
 
-    # Prevent label shrinking
     fig.update_layout(
         uniformtext_mode="show",
-        uniformtext_minsize=12
+        uniformtext_minsize=11
     )
 
-    # Dollar formatting
+    # Dollar formatting on y axis (each panel)
     fig.update_yaxes(
         tickprefix="$",
         separatethousands=True
     )
 
-    # Bar spacing
+    # Keep bars thick
     fig.update_layout(
         bargap=0.12,
         bargroupgap=0.05
     )
 
-    # Legend fully separated
+    # ✅ Title higher, legend lower (no collision)
     fig.update_layout(
+        title=dict(x=0.01, y=0.985),
         legend=dict(
             title="FY Group",
             orientation="v",
             yanchor="top",
-            y=1,
+            y=0.90,          # ✅ lower than title
             xanchor="left",
-            x=1.15
+            x=1.12,
+            tracegroupgap=10
         ),
-        margin=dict(r=360, t=120)
+        margin=dict(r=340, t=140, b=90)
     )
 
     fig.update_xaxes(tickangle=30)
 
-    # Height scales with number of metrics
-    fig_height = 650 if len(selected_metrics) <= 2 else 750
+    # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
-
     st.plotly_chart(fig, use_container_width=True)
