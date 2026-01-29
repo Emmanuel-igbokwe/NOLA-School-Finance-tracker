@@ -1243,7 +1243,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                 )
 
 # ============================================================
-# 5) OTHER METRICS — SIMPLE BAR (optional)
+# 5) OTHER METRICS — SIMPLE BAR (FACETED)
 # ============================================================
 else:
     st.markdown("## 📌 Other Metrics (Actuals)")
@@ -1261,7 +1261,7 @@ else:
     selected_metrics = st.sidebar.multiselect(
         "📊 Select Metric(s):",
         other_metrics,
-        default=other_metrics[:3]
+        default=other_metrics[:1]
     )
 
     filtered = df_long[
@@ -1281,9 +1281,13 @@ else:
         st.stop()
 
     filtered["FY Group"] = filtered["Fiscal Year"].astype(str).str.split().str[0]
-
-    # Dollar labels on bars
     filtered["Label"] = filtered["ValueNum"].apply(lambda v: f"${v:,.0f}")
+
+    # Build dynamic metric title
+    if len(selected_metrics) == 1:
+        metric_title = selected_metrics[0]
+    else:
+        metric_title = " | ".join(selected_metrics)
 
     fig = px.bar(
         filtered,
@@ -1292,38 +1296,45 @@ else:
         color="FY Group",
         color_discrete_map=fy_color_map,
         barmode="group",
+        facet_col="Metric",                 # 🔥 SIDE-BY-SIDE METRICS
+        facet_col_spacing=0.08,
         text="Label",
-        title=f"{selected_school} — Other Metrics"
+        title=f"{selected_school} — {metric_title}"
     )
 
-    # Reduced value label size ONLY
+    # Clean facet titles
+    fig.for_each_annotation(
+        lambda a: a.update(text=a.text.split("=")[-1])
+    )
+
+    # Value labels (reduced size)
     fig.update_traces(
         texttemplate="%{text}",
         textposition="outside",
-        textfont=dict(size=16),   # 👈 reduced size
+        textfont=dict(size=14),
         cliponaxis=False,
         width=0.42
     )
 
-    # Prevent Plotly from shrinking text
+    # Prevent label shrinking
     fig.update_layout(
-        uniformtext_minsize=14,
-        uniformtext_mode="show"
+        uniformtext_mode="show",
+        uniformtext_minsize=12
     )
 
-    # Dollar formatting on Y-axis
+    # Dollar formatting
     fig.update_yaxes(
         tickprefix="$",
         separatethousands=True
     )
 
-    # Bar spacing (unchanged)
+    # Bar spacing
     fig.update_layout(
         bargap=0.12,
         bargroupgap=0.05
     )
 
-    # Legend fully separated on the right
+    # Legend fully separated
     fig.update_layout(
         legend=dict(
             title="FY Group",
@@ -1331,20 +1342,15 @@ else:
             yanchor="top",
             y=1,
             xanchor="left",
-            x=1.18,
-            tracegroupgap=10
+            x=1.15
         ),
         margin=dict(r=360, t=120)
     )
 
-    fig.update_layout(
-        title=dict(x=0.01, y=0.98)
-    )
-
     fig.update_xaxes(tickangle=30)
 
-    fig = apply_plot_style(fig, height=650)
+    # Height scales with number of metrics
+    fig_height = 650 if len(selected_metrics) <= 2 else 750
+    fig = apply_plot_style(fig, height=fig_height)
+
     st.plotly_chart(fig, use_container_width=True)
-
-
-
