@@ -1239,11 +1239,11 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         st.warning("⚠️ Enrollment dataset not loaded.")
         st.stop()
 
-    # ---------- helper (local to this block so you only paste once) ----------
-    def _estimate_feb_from_oct_ratio(_df, school, freeze_fy, ratio_floor=0.70, ratio_cap=1.10):
+      # ---------- helper (local to this block so you only paste once) ----------
+    def _estimate_feb_from_oct_ratio(_df, school, freeze_fy, ratio_floor=0.85, ratio_cap=1.05):
         """
         If February 1 Count is missing at freeze year but October 1 Count exists,
-        estimate Feb using historical median Feb/Oct ratio for the same school.
+        estimate Feb using the RECENT (last 3 years) median Feb/Oct ratio for the same school.
         Returns None if it can't estimate.
         """
         oct_df = _df[(_df["Schools"] == school) & (_df["Metric"] == "October 1 Count")].copy()
@@ -1255,16 +1255,19 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         oct_df["Oct"] = pd.to_numeric(oct_df["Value"], errors="coerce")
         feb_df["Feb"] = pd.to_numeric(feb_df["Value"], errors="coerce")
 
-        # if Feb exists in freeze year, no fill needed
+        # If Feb exists in freeze year, no fill needed
         feb_freeze = feb_df[feb_df["FY"] == str(freeze_fy)]
         if not feb_freeze.empty and np.isfinite(feb_freeze["Feb"].iloc[0]):
             return None
 
-        # need Oct in freeze year
+        # Need Oct in freeze year
         oct_freeze = oct_df[oct_df["FY"] == str(freeze_fy)]
-        if oct_freeze.empty or (not np.isfinite(oct_freeze["Oct"].iloc[0])) or oct_freeze["Oct"].iloc[0] <= 0:
+        if oct_freeze.empty:
+            return None
+        if (not np.isfinite(oct_freeze["Oct"].iloc[0])) or (oct_freeze["Oct"].iloc[0] <= 0):
             return None
 
+        # Build historical pairs
         merged = pd.merge(
             oct_df[["FY", "Oct"]],
             feb_df[["FY", "Feb"]],
@@ -1275,25 +1278,17 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         if merged.empty:
             return None
 
-      # --- use recent years only (last 3 with valid data) ---
-merged["sort_key"] = merged["FY"].apply(sort_fy_only)
-merged = merged.sort_values("sort_key")
+        # --- use recent years only (last 3 valid years) ---
+        merged["sort_key"] = merged["FY"].apply(sort_fy_only)
+        merged = merged.sort_values("sort_key")
+        recent = merged.tail(3)
 
-recent = merged.tail(3)  # last 3 years only
-ratio = float((recent["Feb"] / recent["Oct"]).median())
+        ratio = float((recent["Feb"] / recent["Oct"]).median())
+        ratio = float(np.clip(ratio, ratio_floor, ratio_cap))
 
-# --- adaptive floor: Feb should not drop too far below Oct ---
-adaptive_floor = 0.85
-adaptive_cap = 1.05
-
-ratio = float(np.clip(ratio, adaptive_floor, adaptive_cap))
-
-oct_val = float(oct_freeze["Oct"].iloc[0])
-feb_est = oct_val * ratio
-
-return float(feb_est)
-
-
+        oct_val = float(oct_freeze["Oct"].iloc[0])
+        feb_est = oct_val * ratio
+        return float(feb_est)
     # -----------------------------------------------------------------------
 
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options_budget)
@@ -1634,6 +1629,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
