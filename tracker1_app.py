@@ -1049,19 +1049,21 @@ elif metric_group == "CSAF Predicted":
     # ----------------------------
     # Ensure your TYPE_COLOR_CSAF_PRED supports both labels:
     # TYPE_COLOR_CSAF_PRED = {"Actual":"#1f77b4","Forecast (Frozen)":"#e15759","Forecast (Unfrozen)":"#e15759"}
-    if "Forecast (Unfrozen)" not in TYPE_COLOR_CSAF_PRED:
-        TYPE_COLOR_CSAF_PRED = dict(TYPE_COLOR_CSAF_PRED)
-        TYPE_COLOR_CSAF_PRED["Forecast (Unfrozen)"] = TYPE_COLOR_CSAF_PRED.get("Forecast (Frozen)", "#e15759")
-      # Build chart
-    fig = px.bar(
-        combined,
-        x="Period", y="Value",
-        color="Type",
-        barmode="group",
-        text="Label",
-        color_discrete_map=TYPE_COLOR_CSAF_PRED,
-        title=f"{selected_school} — {selected_metric}"
-    )
+   if "Forecast (Unfrozen)" not in TYPE_COLOR_CSAF_PRED:
+    TYPE_COLOR_CSAF_PRED = dict(TYPE_COLOR_CSAF_PRED)
+    TYPE_COLOR_CSAF_PRED["Forecast (Unfrozen)"] = TYPE_COLOR_CSAF_PRED.get("Forecast (Frozen)", "#e15759")
+
+# Build chart
+fig = px.bar(
+    combined,
+    x="Period", y="Value",
+    color="Type",
+    barmode="group",
+    text="Label",
+    color_discrete_map=TYPE_COLOR_CSAF_PRED,
+    title=f"{selected_school} — {selected_metric}"
+)
+
 
     # Value labels visible
     fig.update_traces(
@@ -1694,6 +1696,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
