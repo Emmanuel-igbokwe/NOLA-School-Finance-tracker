@@ -1415,9 +1415,84 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             })
             st.session_state[f"__intervals__{met}"] = forecast_part_int
 
-        if show_model_table:
+           if show_model_table:
             st.session_state[f"__scores__{met}"] = scores
 
+    # ============================================================
+    # ✅ FIX FY27–FY28 FEB: derive Feb forecasts from Oct forecasts
+    #    (Feb should NOT be forecast independently)
+    # ============================================================
+    if ("October 1 Count" in selected_metrics) and ("February 1 Count" in selected_metrics):
+
+        # Build recent Feb/Oct ratio from history (same school)
+        oct_hist = df_budget_long[
+            (df_budget_long["Schools"] == selected_school) &
+            (df_budget_long["Metric"] == "October 1 Count")
+        ].copy()
+        feb_hist = df_budget_long[
+            (df_budget_long["Schools"] == selected_school) &
+            (df_budget_long["Metric"] == "February 1 Count")
+        ].copy()
+
+        oct_hist["FY"] = oct_hist["Fiscal Year"].astype(str)
+        feb_hist["FY"] = feb_hist["Fiscal Year"].astype(str)
+
+        oct_hist["Oct"] = pd.to_numeric(oct_hist["Value"], errors="coerce")
+        feb_hist["Feb"] = pd.to_numeric(feb_hist["Value"], errors="coerce")
+
+        ratio_df = pd.merge(
+            oct_hist[["FY", "Oct"]],
+            feb_hist[["FY", "Feb"]],
+            on="FY",
+            how="inner"
+        ).dropna()
+
+        ratio_df = ratio_df[(ratio_df["Oct"] > 0) & (ratio_df["Feb"] > 0)]
+
+        if not ratio_df.empty:
+            ratio_df["sort_key"] = ratio_df["FY"].apply(sort_fy_only)
+            ratio_df = ratio_df.sort_values("sort_key")
+
+            recent = ratio_df.tail(3)  # last 3 years only
+            ratio = float((recent["Feb"] / recent["Oct"]).median())
+
+            # realistic retention bounds (tune if needed)
+            ratio = float(np.clip(ratio, 0.90, 1.03))
+
+            # Combine frames temporarily so we can read Oct forecasts
+            tmp = pd.concat(combined_frames, ignore_index=True)
+            tmp["sort_key"] = tmp["FY"].apply(sort_fy_only)
+
+            oct_fore = tmp[
+                (tmp["Metric"] == "October 1 Count") &
+                (tmp["Type"] == "Forecast (Frozen)")
+            ].sort_values("sort_key")
+
+            if not oct_fore.empty:
+                # Build Feb forecasts from Oct forecasts
+                feb_fore = oct_fore.copy()
+                feb_fore["Metric"] = "February 1 Count"
+                feb_fore["ValueNum"] = feb_fore["ValueNum"] * ratio
+
+                # Safety: Feb must stay close to Oct
+                feb_fore["ValueNum"] = np.clip(
+                    feb_fore["ValueNum"],
+                    0.90 * oct_fore["ValueNum"].values,
+                    1.03 * oct_fore["ValueNum"].values
+                )
+
+                # Remove the old (too-low) Feb forecasts only (keep Feb actuals!)
+                new_frames = []
+                for fr in combined_frames:
+                    if not {"FY", "Metric", "Type"}.issubset(fr.columns):
+                        new_frames.append(fr)
+                        continue
+                    drop_mask = (fr["Metric"] == "February 1 Count") & (fr["Type"] == "Forecast (Frozen)")
+                    new_frames.append(fr.loc[~drop_mask].copy())
+
+                combined_frames = new_frames
+                combined_frames.append(feb_fore)
+    
     if not combined_frames:
         st.warning("⚠️ No metrics could be forecast with current selections.")
         st.stop()
@@ -1629,6 +1704,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
