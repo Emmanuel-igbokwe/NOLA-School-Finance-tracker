@@ -810,7 +810,7 @@ def bootstrap_intervals(y_hist, q_hist, horizon, model_fn, season_period=3, n_si
 # ============================================================
 st.sidebar.header("🔎 Filters")
 
-modes = ["CSAF Metrics (4-panel)", "CSAF Predicted", "Other Metrics)"]
+modes = ["CSAF Metrics (4-panel)", "CSAF Predicted", "Other Metrics"]
 if not df_budget_long.empty:
     modes += ["Budget/Enrollment (Bar)", "Budget/Enrollment Predicted (Bar)"]
 
@@ -1714,6 +1714,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
