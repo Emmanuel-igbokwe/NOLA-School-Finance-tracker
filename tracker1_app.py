@@ -1230,7 +1230,7 @@ elif metric_group == "Budget/Enrollment (Bar)":
 #    ✅ Legend/title collision fixed
 # ============================================================
 elif metric_group == "Budget/Enrollment Predicted (Bar)":
-    st.markdown("## 🔮 Budget / Enrollment Predicted (Stable Forecast)")
+    st.markdown("## 🔮 Enrollment Predicted (Stable Forecast)")
 
     if df_budget_long.empty:
         st.warning("⚠️ Enrollment dataset not loaded.")
@@ -1268,7 +1268,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     show_intervals = st.sidebar.checkbox("📊 Show simple bands (±1.5% on counts)", value=False)
     show_model_table = st.sidebar.checkbox("Show model info table", value=True)
 
-    run = st.sidebar.button("▶ Run Budget/Enrollment Prediction")
+    run = st.sidebar.button("▶ Run Enrollment Prediction")
     if not run:
         st.info("Choose options in the sidebar, then click **Run Budget/Enrollment Prediction**.")
         st.stop()
@@ -1563,7 +1563,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
 
     # Lock legend ABOVE title + bars (prevents collision)
     fig.update_layout(
-        title=dict(text=f"{selected_school} — Budget / Enrollment Predicted (Freeze at {freeze_at})", x=0.01, y=0.985),
+        title=dict(text=f"{selected_school} — Enrollment Predicted (Freeze at {freeze_at})", x=0.01, y=0.985),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -1716,6 +1716,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
