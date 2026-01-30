@@ -1132,7 +1132,7 @@ elif metric_group == "CSAF Predicted":
 # 3) BUDGET/ENROLLMENT (ACTUAL) — BAR ONLY
 # ============================================================
 elif metric_group == "Budget/Enrollment (Bar)":
-    st.markdown("## 📊 Budget / Enrollment (Actuals — Bar Only)")
+    st.markdown("## 📊 Enrollment (Actuals)")
 
     if df_budget_long.empty:
         st.warning("⚠️ Enrollment dataset not loaded.")
@@ -1716,6 +1716,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
