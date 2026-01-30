@@ -810,7 +810,7 @@ def bootstrap_intervals(y_hist, q_hist, horizon, model_fn, season_period=3, n_si
 # ============================================================
 st.sidebar.header("🔎 Filters")
 
-modes = ["CSAF Metrics (4-panel)", "CSAF Predicted", "Other Metrics (4-panel)"]
+modes = ["CSAF Metrics (4-panel)", "CSAF Predicted", "Other Metrics)"]
 if not df_budget_long.empty:
     modes += ["Budget/Enrollment (Bar)", "Budget/Enrollment Predicted (Bar)"]
 
@@ -1598,8 +1598,6 @@ else:
         fiscal_options,
         default=fiscal_options
     )
-
-    # ✅ THIS LINE IS CORRECT — keep it here
     other_metrics = sorted(
         [m for m in df_long["Metric"].dropna().unique() if m not in csaf_metrics]
     )
@@ -1660,7 +1658,7 @@ else:
         color_discrete_map=fy_color_map,
         barmode="group",
         facet_col="Metric",
-        facet_col_wrap=4,              # ✅ 4 panels per row
+        facet_col_wrap=4,              #  4 panels per row
         facet_col_spacing=0.06,
         facet_row_spacing=0.12,
         text="Label",
@@ -1716,6 +1714,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
