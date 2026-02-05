@@ -823,6 +823,79 @@ def parse_q(label: str):
     return int(m.group(2)) if m else None
 
 # ============================================================
+# CSAF (WRITE-UPS + BENCHMARK LINES) — DROP-IN FULL REWRITE
+# Paste this ONCE (above your metric_group sections), then
+# replace your CSAF 4-panel section with the one below.
+# ============================================================
+
+# ---- CSAF benchmarks (reference lines) ----
+csaf_best = {
+    "FB Ratio": {"threshold": 0.10, "op": ">="},              # 10%
+    "Liabilities to Assets": {"threshold": 0.90, "op": "<="}, # 0.90
+    "Current Ratio": {"threshold": 1.50, "op": ">="},         # 1.50
+    "Unrestricted Days COH": {"threshold": 60, "op": ">="},   # 60 days
+}
+
+# ---- CSAF titles/write-ups (NO “Best practice” wording; only the number) ----
+csaf_desc = {
+    "FB Ratio": (
+        "<b>Fund Balance Ratio:</b> Will an unforeseen event result in fiscal crisis? "
+        "Unrestricted Fund Balance/Total Exp.<br>"
+        "<b>&ge; 10%</b>"
+    ),
+    "Liabilities to Assets": (
+        "<b>Liabilities to Assets Ratio:</b> What % of Liabilities are financed by Assets? "
+        "A lower ratio is best. Total Liabilities/Total Assets.<br>"
+        "<b>&le; 0.90</b>"
+    ),
+    "Current Ratio": (
+        "<b>Current Ratio:</b> Can bills be paid? Positive numbers indicate that there are enough "
+        "current assets to pay bills. Current Assets/Current Liabilities.<br>"
+        "<b>&ge; 1.50</b>"
+    ),
+    "Unrestricted Days COH": (
+        "<b>Unrestricted Cash on Hand:</b> Enough cash to pay bills for 60+ days if $0 incoming cash? "
+        "(Unrestricted Cash)/((Total Exp.-Depreciation)/365).<br>"
+        "<b>&ge; 60</b>"
+    ),
+}
+
+def _csaf_threshold_label(metric: str) -> str:
+    """Return ONLY threshold label like '≥ 10%' or '≤ 0.90' (no 'Best practice')."""
+    if metric not in csaf_best:
+        return ""
+
+    thr = csaf_best[metric]["threshold"]
+    op = csaf_best[metric].get("op", ">=")
+    op_symbol = {"<=": "≤", ">=": "≥"}.get(op, op)
+
+    if metric == "FB Ratio":
+        return f"{op_symbol} {thr*100:.0f}%"
+    if metric == "Unrestricted Days COH":
+        return f"{op_symbol} {thr:.0f}"
+    return f"{op_symbol} {thr:.2f}"
+
+def add_best_practice_csaf(fig, metric, row=None, col=None):
+    """Add dotted benchmark line with ONLY the numeric label."""
+    if metric not in csaf_best:
+        return fig
+
+    thr = csaf_best[metric]["threshold"]
+    label = _csaf_threshold_label(metric)
+
+    fig.add_hline(
+        y=thr,
+        line_width=2,
+        line_dash="dot",
+        annotation_text=label,
+        annotation_position="top left",
+        row=row,
+        col=col
+    )
+    return fig
+
+
+# ============================================================
 # 1) CSAF METRICS — 4 PANEL (FULL FIXED BLOCK)
 # Fixes:
 # - No NameError: defines school_options & fiscal_options safely
@@ -859,11 +932,7 @@ if metric_group == "CSAF Metrics (4-panel)":
         default=fiscal_options
     )
 
-    d = df[
-        (df["Schools"].astype(str) == str(selected_school)) &
-        (df["Fiscal Year"].astype(str).isin(selected_fy))
-    ].copy()
-
+    d = df[(df["Schools"].astype(str) == str(selected_school)) & (df["Fiscal Year"].astype(str).isin(selected_fy))].copy()
     if d.empty:
         st.warning("⚠️ No data for selection.")
         st.stop()
@@ -886,7 +955,7 @@ if metric_group == "CSAF Metrics (4-panel)":
             csaf_desc["Unrestricted Days COH"],
         ],
         horizontal_spacing=0.08,
-        vertical_spacing=0.16
+        vertical_spacing=0.16  # more room for write-ups
     )
 
     metric_positions = {
@@ -913,7 +982,8 @@ if metric_group == "CSAF Metrics (4-panel)":
             if sub.empty:
                 continue
 
-            show_leg = (r == 1 and c == 1)  # legend only once
+            # show legend ONLY once (first subplot)
+            show_leg = (r == 1 and c == 1)
 
             fig.add_trace(
                 go.Bar(
@@ -922,8 +992,8 @@ if metric_group == "CSAF Metrics (4-panel)":
                     name=fygrp,
                     legendgroup=fygrp,
                     showlegend=show_leg,
-                    marker_color=fy_color_map.get(fygrp, None),
-                    text=[fmt_csaf(met, v) for v in sub["ValueNum"]],
+                    marker_color=fy_color_map.get(fygrp, None),  # uses your existing FY color map
+                    text=[fmt_csaf(met, v) for v in sub["ValueNum"]],  # uses your existing formatter
                     textposition="outside",
                     cliponaxis=False
                 ),
@@ -1783,6 +1853,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
