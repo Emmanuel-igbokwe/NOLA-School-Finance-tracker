@@ -233,78 +233,75 @@ def apply_plot_style(fig, height=CHART_H):
 # CSAF BEST PRACTICE (NO “BEST PRACTICE” WORDING — ONLY NUMBER)
 # ============================================================
 csaf_metrics = ["FB Ratio", "Liabilities to Assets", "Current Ratio", "Unrestricted Days COH"]
-csaf_desc = {
-    "FB Ratio": "Fund Balance Ratio: Unrestricted Fund Balance / Total Exp.",
-    "Liabilities to Assets": "Liabilities to Assets Ratio: Total Liabilities / Total Assets",
-    "Current Ratio": "Current Ratio: Current Assets / Current Liabilities",
-    "Unrestricted Days COH": "Unrestricted Cash on Hand: Cash / ((Exp.-Depreciation)/365)",
-}
+
+# Benchmarks for reference lines
 csaf_best = {
-    "FB Ratio": {"threshold": 0.10, "direction": "gte"},
-    "Liabilities to Assets": {"threshold": 0.90, "direction": "lte"},
-    "Current Ratio": {"threshold": 1.50, "direction": "gte"},
-    "Unrestricted Days COH": {"threshold": 60.0, "direction": "gte"},
+    "FB Ratio": {"threshold": 0.10, "op": ">="},              # 10%
+    "Liabilities to Assets": {"threshold": 0.90, "op": "<="}, # 0.90
+    "Current Ratio": {"threshold": 1.50, "op": ">="},         # 1.50
+    "Unrestricted Days COH": {"threshold": 60, "op": ">="},   # 60 days
 }
+
+# Subplot write-ups (NO "Best practice" text — only the number)
+csaf_desc = {
+    "FB Ratio": (
+        "<b>Fund Balance Ratio:</b> Will an unforeseen event result in fiscal crisis? "
+        "Unrestricted Fund Balance/Total Exp.<br>"
+        "<b>&ge; 10%</b>"
+    ),
+    "Liabilities to Assets": (
+        "<b>Liabilities to Assets Ratio:</b> What % of Liabilities are financed by Assets? "
+        "A lower ratio is best. Total Liabilities/Total Assets.<br>"
+        "<b>&le; 0.90</b>"
+    ),
+    "Current Ratio": (
+        "<b>Current Ratio:</b> Can bills be paid? Positive numbers indicate that there are enough "
+        "current assets to pay bills. Current Assets/Current Liabilities.<br>"
+        "<b>&ge; 1.50</b>"
+    ),
+    "Unrestricted Days COH": (
+        "<b>Unrestricted Cash on Hand:</b> Enough cash to pay bills for 60+ days if $0 incoming cash? "
+        "(Unrestricted Cash)/((Total Exp.-Depreciation)/365).<br>"
+        "<b>&ge; 60</b>"
+    ),
+}
+
+def _csaf_threshold_label(metric: str) -> str:
+    """Return only the benchmark label (e.g., '≥ 10%', '≤ 0.90', '≥ 1.50', '≥ 60')."""
+    if metric not in csaf_best:
+        return ""
+
+    thr = csaf_best[metric]["threshold"]
+    op = csaf_best[metric].get("op", ">=")
+
+    op_symbol = {"<=": "≤", ">=": "≥"}.get(op, op)
+
+    if metric == "FB Ratio":
+        # 0.10 -> 10%
+        return f"{op_symbol} {thr*100:.0f}%"
+    elif metric == "Unrestricted Days COH":
+        return f"{op_symbol} {thr:.0f}"
+    else:
+        return f"{op_symbol} {thr:.2f}"
 
 def add_best_practice_csaf(fig, metric, row=None, col=None):
+    """Add benchmark reference line with ONLY numeric label (no 'Best practice' wording)."""
     if metric not in csaf_best:
         return fig
+
     thr = csaf_best[metric]["threshold"]
+    label = _csaf_threshold_label(metric)
 
-    if metric == "FB Ratio":
-        label = f"{thr:.0%}"
-    elif metric in ("Liabilities to Assets", "Current Ratio"):
-        label = f"{thr:.2f}"
-    else:
-        label = f"{thr:.0f}"
-
-    kwargs = dict(
+    fig.add_hline(
         y=thr,
+        line_width=2,
         line_dash="dot",
-        line_color="#005A9C",
-        line_width=3,
-        annotation_text=label,                 # ONLY number
+        annotation_text=label,          # ✅ ONLY number label
         annotation_position="top left",
-        annotation_font=dict(size=16, color="#0066cc"),
+        row=row,
+        col=col
     )
-    if row is not None and col is not None:
-        fig.add_hline(row=row, col=col, **kwargs)
-    else:
-        fig.add_hline(**kwargs)
     return fig
-
-def fmt_csaf(metric, v):
-    if pd.isna(v):
-        return ""
-    if metric == "FB Ratio":
-        return f"{v:.0%}"
-    if metric in ("Liabilities to Assets", "Current Ratio"):
-        return f"{v:.2f}"
-    if metric == "Unrestricted Days COH":
-        return f"{v:,.0f}"
-    return f"{v:,.0f}"
-
-# ============================================================
-# LOAD DATA (FINANCIALS)
-# ============================================================
-fy25_path = "FY25.xlsx"
-try:
-    df = pd.read_excel(fy25_path, sheet_name="FY25", header=0)
-except Exception as e:
-    st.error(f"❌ Could not load {fy25_path}: {e}")
-    st.stop()
-
-df.columns = df.columns.str.strip()
-df = df.dropna(subset=["Schools", "Fiscal Year"])
-df["Fiscal Year"] = df["Fiscal Year"].astype(str).str.strip().apply(std_fyq_label)
-
-fiscal_options = sorted(df["Fiscal Year"].dropna().unique(), key=sort_fy)
-school_options = sorted(df["Schools"].dropna().unique())
-
-# Long form for Other Metrics
-value_vars = [c for c in df.columns if c not in ["Schools", "Fiscal Year"]]
-df_long = df.melt(id_vars=["Schools", "Fiscal Year"], value_vars=value_vars, var_name="Metric", value_name="Value")
-
 # ============================================================
 # LOAD DATA (BUDGET / ENROLLMENT)
 # ============================================================
@@ -1766,6 +1763,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
