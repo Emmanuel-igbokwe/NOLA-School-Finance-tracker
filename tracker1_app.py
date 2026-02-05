@@ -823,15 +823,35 @@ def parse_q(label: str):
     return int(m.group(2)) if m else None
 
 # ============================================================
-# 1) CSAF METRICS — 4 PANEL  (FULL FIXED BLOCK)
-#   Fixes:
-#   - FY legend not repeated 4x (show legend once)
-#   - FY/Q x-axis congestion reduced (rotate + smaller font)
-#   - Consistent x category order across all subplots
+# 1) CSAF METRICS — 4 PANEL (FULL FIXED BLOCK)
+# Fixes:
+# - No NameError: defines school_options & fiscal_options safely
+# - FY legend not repeated 4x
+# - FY/Q x-axis congestion reduced
+# - Consistent x order across all subplots
+# - More room for long write-ups
 # ============================================================
 if metric_group == "CSAF Metrics (4-panel)":
     st.markdown("## 📌 CSAF Metrics (4-panel)")
 
+    # ---------- SAFETY: define these BEFORE using sidebar widgets ----------
+    if "Schools" not in df.columns:
+        st.error("Missing column: 'Schools'")
+        st.stop()
+    if "Fiscal Year" not in df.columns:
+        st.error("Missing column: 'Fiscal Year'")
+        st.stop()
+
+    school_options = (
+        df["Schools"].dropna().astype(str).sort_values().unique().tolist()
+    )
+
+    fiscal_options = (
+        df["Fiscal Year"].dropna().astype(str).unique().tolist()
+    )
+    fiscal_options = sorted(fiscal_options, key=sort_fy)  # uses your existing sort_fy
+
+    # ---------- Sidebar controls ----------
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options)
     selected_fy = st.sidebar.multiselect(
         "📅 Select Fiscal Year + Quarter:",
@@ -839,28 +859,34 @@ if metric_group == "CSAF Metrics (4-panel)":
         default=fiscal_options
     )
 
-    d = df[(df["Schools"] == selected_school) & (df["Fiscal Year"].isin(selected_fy))].copy()
+    d = df[
+        (df["Schools"].astype(str) == str(selected_school)) &
+        (df["Fiscal Year"].astype(str).isin(selected_fy))
+    ].copy()
+
     if d.empty:
         st.warning("⚠️ No data for selection.")
         st.stop()
 
     # sort + FY grouping
+    d["Fiscal Year"] = d["Fiscal Year"].astype(str)
     d["sort_key"] = d["Fiscal Year"].apply(sort_fy)
     d = d.sort_values("sort_key")
-    d["FY Group"] = d["Fiscal Year"].astype(str).str.split().str[0]
+    d["FY Group"] = d["Fiscal Year"].str.split().str[0].astype(str)
 
-    # Build a global x order once (so all panels share same category order)
+    # Consistent x order
     x_order = d["Fiscal Year"].tolist()
 
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=[
-            f"{csaf_desc['FB Ratio']}",
-            f"{csaf_desc['Liabilities to Assets']}",
-            f"{csaf_desc['Current Ratio']}",
-            f"{csaf_desc['Unrestricted Days COH']}",
+            csaf_desc["FB Ratio"],
+            csaf_desc["Liabilities to Assets"],
+            csaf_desc["Current Ratio"],
+            csaf_desc["Unrestricted Days COH"],
         ],
-        horizontal_spacing=0.08, vertical_spacing=0.12
+        horizontal_spacing=0.08,
+        vertical_spacing=0.16
     )
 
     metric_positions = {
@@ -874,9 +900,8 @@ if metric_group == "CSAF Metrics (4-panel)":
         dd = d.copy()
         dd["ValueNum"] = pd.to_numeric(dd[met], errors="coerce")
         dd = dd.dropna(subset=["ValueNum"])
-        dd["FY Group"] = dd["FY Group"].astype(str)
 
-        # Keep FY groups ordered as they appear in x_order
+        # FY groups in chronological order
         fy_groups_ordered = (
             dd.drop_duplicates("FY Group")[["FY Group", "sort_key"]]
             .sort_values("sort_key")["FY Group"]
@@ -888,8 +913,7 @@ if metric_group == "CSAF Metrics (4-panel)":
             if sub.empty:
                 continue
 
-            # ✅ Only show legend in the FIRST subplot (prevents repeats)
-            show_leg = (r == 1 and c == 1)
+            show_leg = (r == 1 and c == 1)  # legend only once
 
             fig.add_trace(
                 go.Bar(
@@ -908,7 +932,6 @@ if metric_group == "CSAF Metrics (4-panel)":
 
         add_best_practice_csaf(fig, met, row=r, col=c)
 
-        # ✅ Consistent x ordering + readable ticks
         fig.update_xaxes(
             row=r, col=c,
             categoryorder="array",
@@ -917,8 +940,6 @@ if metric_group == "CSAF Metrics (4-panel)":
             tickfont=dict(size=10),
             automargin=True
         )
-
-        # Optional: slightly smaller y tick labels for neatness
         fig.update_yaxes(row=r, col=c, tickfont=dict(size=11), automargin=True)
 
     fig.update_layout(
@@ -930,18 +951,17 @@ if metric_group == "CSAF Metrics (4-panel)":
         height=980,
         font=dict(size=14),
 
-        # ✅ Clean compact legend (only one row, top)
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.14,
+            y=1.18,
             xanchor="left",
             x=0,
             font=dict(size=12),
             tracegroupgap=10
         ),
 
-        margin=dict(t=140, b=80, l=20, r=20),
+        margin=dict(t=180, b=80, l=20, r=20),
     )
 
     st.plotly_chart(
@@ -1763,6 +1783,7 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 
