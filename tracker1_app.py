@@ -233,75 +233,78 @@ def apply_plot_style(fig, height=CHART_H):
 # CSAF BEST PRACTICE (NO “BEST PRACTICE” WORDING — ONLY NUMBER)
 # ============================================================
 csaf_metrics = ["FB Ratio", "Liabilities to Assets", "Current Ratio", "Unrestricted Days COH"]
-
-# Benchmarks for reference lines
-csaf_best = {
-    "FB Ratio": {"threshold": 0.10, "op": ">="},              # 10%
-    "Liabilities to Assets": {"threshold": 0.90, "op": "<="}, # 0.90
-    "Current Ratio": {"threshold": 1.50, "op": ">="},         # 1.50
-    "Unrestricted Days COH": {"threshold": 60, "op": ">="},   # 60 days
-}
-
-# Subplot write-ups (NO "Best practice" text — only the number)
 csaf_desc = {
-    "FB Ratio": (
-        "<b>Fund Balance Ratio:</b> Will an unforeseen event result in fiscal crisis? "
-        "Unrestricted Fund Balance/Total Exp.<br>"
-        "<b>&ge; 10%</b>"
-    ),
-    "Liabilities to Assets": (
-        "<b>Liabilities to Assets Ratio:</b> What % of Liabilities are financed by Assets? "
-        "A lower ratio is best. Total Liabilities/Total Assets.<br>"
-        "<b>&le; 0.90</b>"
-    ),
-    "Current Ratio": (
-        "<b>Current Ratio:</b> Can bills be paid? Positive numbers indicate that there are enough "
-        "current assets to pay bills. Current Assets/Current Liabilities.<br>"
-        "<b>&ge; 1.50</b>"
-    ),
-    "Unrestricted Days COH": (
-        "<b>Unrestricted Cash on Hand:</b> Enough cash to pay bills for 60+ days if $0 incoming cash? "
-        "(Unrestricted Cash)/((Total Exp.-Depreciation)/365).<br>"
-        "<b>&ge; 60</b>"
-    ),
+    "FB Ratio": "Fund Balance Ratio: Unrestricted Fund Balance / Total Exp.",
+    "Liabilities to Assets": "Liabilities to Assets Ratio: Total Liabilities / Total Assets",
+    "Current Ratio": "Current Ratio: Current Assets / Current Liabilities",
+    "Unrestricted Days COH": "Unrestricted Cash on Hand: Cash / ((Exp.-Depreciation)/365)",
 }
-
-def _csaf_threshold_label(metric: str) -> str:
-    """Return only the benchmark label (e.g., '≥ 10%', '≤ 0.90', '≥ 1.50', '≥ 60')."""
-    if metric not in csaf_best:
-        return ""
-
-    thr = csaf_best[metric]["threshold"]
-    op = csaf_best[metric].get("op", ">=")
-
-    op_symbol = {"<=": "≤", ">=": "≥"}.get(op, op)
-
-    if metric == "FB Ratio":
-        # 0.10 -> 10%
-        return f"{op_symbol} {thr*100:.0f}%"
-    elif metric == "Unrestricted Days COH":
-        return f"{op_symbol} {thr:.0f}"
-    else:
-        return f"{op_symbol} {thr:.2f}"
+csaf_best = {
+    "FB Ratio": {"threshold": 0.10, "direction": "gte"},
+    "Liabilities to Assets": {"threshold": 0.90, "direction": "lte"},
+    "Current Ratio": {"threshold": 1.50, "direction": "gte"},
+    "Unrestricted Days COH": {"threshold": 60.0, "direction": "gte"},
+}
 
 def add_best_practice_csaf(fig, metric, row=None, col=None):
-    """Add benchmark reference line with ONLY numeric label (no 'Best practice' wording)."""
     if metric not in csaf_best:
         return fig
-
     thr = csaf_best[metric]["threshold"]
-    label = _csaf_threshold_label(metric)
 
-    fig.add_hline(
+    if metric == "FB Ratio":
+        label = f"{thr:.0%}"
+    elif metric in ("Liabilities to Assets", "Current Ratio"):
+        label = f"{thr:.2f}"
+    else:
+        label = f"{thr:.0f}"
+
+    kwargs = dict(
         y=thr,
-        line_width=2,
         line_dash="dot",
-        annotation_text=label,          # ✅ ONLY number label
+        line_color="#005A9C",
+        line_width=3,
+        annotation_text=label,                 # ONLY number
         annotation_position="top left",
-        row=row,
-        col=col
+        annotation_font=dict(size=16, color="#0066cc"),
     )
+    if row is not None and col is not None:
+        fig.add_hline(row=row, col=col, **kwargs)
+    else:
+        fig.add_hline(**kwargs)
     return fig
+
+def fmt_csaf(metric, v):
+    if pd.isna(v):
+        return ""
+    if metric == "FB Ratio":
+        return f"{v:.0%}"
+    if metric in ("Liabilities to Assets", "Current Ratio"):
+        return f"{v:.2f}"
+    if metric == "Unrestricted Days COH":
+        return f"{v:,.0f}"
+    return f"{v:,.0f}"
+
+# ============================================================
+# LOAD DATA (FINANCIALS)
+# ============================================================
+fy25_path = "FY25.xlsx"
+try:
+    df = pd.read_excel(fy25_path, sheet_name="FY25", header=0)
+except Exception as e:
+    st.error(f"❌ Could not load {fy25_path}: {e}")
+    st.stop()
+
+df.columns = df.columns.str.strip()
+df = df.dropna(subset=["Schools", "Fiscal Year"])
+df["Fiscal Year"] = df["Fiscal Year"].astype(str).str.strip().apply(std_fyq_label)
+
+fiscal_options = sorted(df["Fiscal Year"].dropna().unique(), key=sort_fy)
+school_options = sorted(df["Schools"].dropna().unique())
+
+# Long form for Other Metrics
+value_vars = [c for c in df.columns if c not in ["Schools", "Fiscal Year"]]
+df_long = df.melt(id_vars=["Schools", "Fiscal Year"], value_vars=value_vars, var_name="Metric", value_name="Value")
+
 # ============================================================
 # LOAD DATA (BUDGET / ENROLLMENT)
 # ============================================================
@@ -823,139 +826,32 @@ def parse_q(label: str):
     return int(m.group(2)) if m else None
 
 # ============================================================
-# CSAF (WRITE-UPS + BENCHMARK LINES) — DROP-IN FULL REWRITE
-# Paste this ONCE (above your metric_group sections), then
-# replace your CSAF 4-panel section with the one below.
-# ============================================================
-
-# ---- CSAF benchmarks (reference lines) ----
-csaf_best = {
-    "FB Ratio": {"threshold": 0.10, "op": ">="},              # 10%
-    "Liabilities to Assets": {"threshold": 0.90, "op": "<="}, # 0.90
-    "Current Ratio": {"threshold": 1.50, "op": ">="},         # 1.50
-    "Unrestricted Days COH": {"threshold": 60, "op": ">="},   # 60 days
-}
-
-# ---- CSAF titles/write-ups (NO “Best practice” wording; only the number) ----
-csaf_desc = {
-    "FB Ratio": (
-        "<b>Fund Balance Ratio:</b> Will an unforeseen event result in fiscal crisis? "
-        "Unrestricted Fund Balance/Total Exp.<br>"
-        "<b>&ge; 10%</b>"
-    ),
-    "Liabilities to Assets": (
-        "<b>Liabilities to Assets Ratio:</b> What % of Liabilities are financed by Assets? "
-        "A lower ratio is best. Total Liabilities/Total Assets.<br>"
-        "<b>&le; 0.90</b>"
-    ),
-    "Current Ratio": (
-        "<b>Current Ratio:</b> Can bills be paid? Positive numbers indicate that there are enough "
-        "current assets to pay bills. Current Assets/Current Liabilities.<br>"
-        "<b>&ge; 1.50</b>"
-    ),
-    "Unrestricted Days COH": (
-        "<b>Unrestricted Cash on Hand:</b> Enough cash to pay bills for 60+ days if $0 incoming cash? "
-        "(Unrestricted Cash)/((Total Exp.-Depreciation)/365).<br>"
-        "<b>&ge; 60</b>"
-    ),
-}
-
-def _csaf_threshold_label(metric: str) -> str:
-    """Return ONLY threshold label like '≥ 10%' or '≤ 0.90' (no 'Best practice')."""
-    if metric not in csaf_best:
-        return ""
-
-    thr = csaf_best[metric]["threshold"]
-    op = csaf_best[metric].get("op", ">=")
-    op_symbol = {"<=": "≤", ">=": "≥"}.get(op, op)
-
-    if metric == "FB Ratio":
-        return f"{op_symbol} {thr*100:.0f}%"
-    if metric == "Unrestricted Days COH":
-        return f"{op_symbol} {thr:.0f}"
-    return f"{op_symbol} {thr:.2f}"
-
-def add_best_practice_csaf(fig, metric, row=None, col=None):
-    """Add dotted benchmark line with ONLY the numeric label."""
-    if metric not in csaf_best:
-        return fig
-
-    thr = csaf_best[metric]["threshold"]
-    label = _csaf_threshold_label(metric)
-
-    fig.add_hline(
-        y=thr,
-        line_width=2,
-        line_dash="dot",
-        annotation_text=label,
-        annotation_position="top left",
-        row=row,
-        col=col
-    )
-    return fig
-
-
-# ============================================================
-# 1) CSAF METRICS — 4 PANEL (FULL FIXED BLOCK)
-# Fixes:
-# - No NameError: defines school_options & fiscal_options safely
-# - FY legend not repeated 4x
-# - FY/Q x-axis congestion reduced
-# - Consistent x order across all subplots
-# - More room for long write-ups
+# 1) CSAF METRICS — 4 PANEL
 # ============================================================
 if metric_group == "CSAF Metrics (4-panel)":
     st.markdown("## 📌 CSAF Metrics (4-panel)")
 
-    # ---------- SAFETY: define these BEFORE using sidebar widgets ----------
-    if "Schools" not in df.columns:
-        st.error("Missing column: 'Schools'")
-        st.stop()
-    if "Fiscal Year" not in df.columns:
-        st.error("Missing column: 'Fiscal Year'")
-        st.stop()
-
-    school_options = (
-        df["Schools"].dropna().astype(str).sort_values().unique().tolist()
-    )
-
-    fiscal_options = (
-        df["Fiscal Year"].dropna().astype(str).unique().tolist()
-    )
-    fiscal_options = sorted(fiscal_options, key=sort_fy)  # uses your existing sort_fy
-
-    # ---------- Sidebar controls ----------
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options)
-    selected_fy = st.sidebar.multiselect(
-        "📅 Select Fiscal Year + Quarter:",
-        fiscal_options,
-        default=fiscal_options
-    )
+    selected_fy = st.sidebar.multiselect("📅 Select Fiscal Year + Quarter:", fiscal_options, default=fiscal_options)
 
-    d = df[(df["Schools"].astype(str) == str(selected_school)) & (df["Fiscal Year"].astype(str).isin(selected_fy))].copy()
+    d = df[(df["Schools"] == selected_school) & (df["Fiscal Year"].isin(selected_fy))].copy()
     if d.empty:
         st.warning("⚠️ No data for selection.")
         st.stop()
 
-    # sort + FY grouping
-    d["Fiscal Year"] = d["Fiscal Year"].astype(str)
     d["sort_key"] = d["Fiscal Year"].apply(sort_fy)
     d = d.sort_values("sort_key")
-    d["FY Group"] = d["Fiscal Year"].str.split().str[0].astype(str)
-
-    # Consistent x order
-    x_order = d["Fiscal Year"].tolist()
+    d["FY Group"] = d["Fiscal Year"].astype(str).str.split().str[0]
 
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=[
-            csaf_desc["FB Ratio"],
-            csaf_desc["Liabilities to Assets"],
-            csaf_desc["Current Ratio"],
-            csaf_desc["Unrestricted Days COH"],
+            f"{csaf_desc['FB Ratio']}",
+            f"{csaf_desc['Liabilities to Assets']}",
+            f"{csaf_desc['Current Ratio']}",
+            f"{csaf_desc['Unrestricted Days COH']}",
         ],
-        horizontal_spacing=0.08,
-        vertical_spacing=0.16  # more room for write-ups
+        horizontal_spacing=0.08, vertical_spacing=0.12
     )
 
     metric_positions = {
@@ -970,47 +866,27 @@ if metric_group == "CSAF Metrics (4-panel)":
         dd["ValueNum"] = pd.to_numeric(dd[met], errors="coerce")
         dd = dd.dropna(subset=["ValueNum"])
 
-        # FY groups in chronological order
-        fy_groups_ordered = (
-            dd.drop_duplicates("FY Group")[["FY Group", "sort_key"]]
-            .sort_values("sort_key")["FY Group"]
-            .tolist()
-        )
+        # enforce FY order
+        dd["FY Group"] = dd["FY Group"].astype(str)
 
-        for fygrp in fy_groups_ordered:
+        for fygrp in dd["FY Group"].dropna().unique():
             sub = dd[dd["FY Group"] == fygrp]
             if sub.empty:
                 continue
-
-            # show legend ONLY once (first subplot)
-            show_leg = (r == 1 and c == 1)
-
             fig.add_trace(
                 go.Bar(
                     x=sub["Fiscal Year"],
                     y=sub["ValueNum"],
                     name=fygrp,
-                    legendgroup=fygrp,
-                    showlegend=show_leg,
-                    marker_color=fy_color_map.get(fygrp, None),  # uses your existing FY color map
-                    text=[fmt_csaf(met, v) for v in sub["ValueNum"]],  # uses your existing formatter
+                    marker_color=fy_color_map.get(fygrp, None),
+                    text=[fmt_csaf(met, v) for v in sub["ValueNum"]],
                     textposition="outside",
-                    cliponaxis=False
                 ),
                 row=r, col=c
             )
 
         add_best_practice_csaf(fig, met, row=r, col=c)
-
-        fig.update_xaxes(
-            row=r, col=c,
-            categoryorder="array",
-            categoryarray=x_order,
-            tickangle=-35,
-            tickfont=dict(size=10),
-            automargin=True
-        )
-        fig.update_yaxes(row=r, col=c, tickfont=dict(size=11), automargin=True)
+        fig.update_xaxes(row=r, col=c, tickangle=0)
 
     fig.update_layout(
         barmode="group",
@@ -1018,27 +894,12 @@ if metric_group == "CSAF Metrics (4-panel)":
         bargroupgap=BARGROUPGAP,
         paper_bgcolor=PLOT_BG,
         plot_bgcolor=PLOT_BG,
-        height=980,
-        font=dict(size=14),
-
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.18,
-            xanchor="left",
-            x=0,
-            font=dict(size=12),
-            tracegroupgap=10
-        ),
-
-        margin=dict(t=180, b=80, l=20, r=20),
+        height=920,
+        font=dict(size=16),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="left", x=0),
+        margin=dict(t=90, b=40, l=20, r=20),
     )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        config={"displayModeBar": True, "displaylogo": False}
-    )
+    st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # 2) CSAF PREDICTED — BAR ONLY (Freeze + Unfrozen modes)
@@ -1853,11 +1714,6 @@ else:
     # Apply your global theme last, with dynamic height
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
-
-
-
-
-
 
 
 
