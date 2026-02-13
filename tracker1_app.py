@@ -1005,13 +1005,6 @@ if metric_group == "📊 Executive Dashboard":
     
     st.plotly_chart(fig, use_container_width=True)
 
-# ============================================================
-# Continue with rest of your existing code...
-# (CSAF 4-panel, CSAF Predicted, Budget/Enrollment, etc.)
-# I've enhanced the first section to show you the pattern.
-# The rest follows the same improvements.
-# ============================================================
-
 elif metric_group == "📌 CSAF Metrics (4-panel)":
     st.markdown("## 📌 CSAF Metrics (4-panel)")
 
@@ -1134,23 +1127,6 @@ elif metric_group == "📌 CSAF Metrics (4-panel)":
         use_container_width=True,
         config={"displayModeBar": True, "displaylogo": False}
     )
-
-# Add remaining dashboards following the same enhanced pattern...
-# I'll provide the key sections to show the improvements
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 💡 Tips")
-st.sidebar.info("""
-**Enhanced Features:**
-- 🎯 Executive dashboard with KPIs
-- 🤖 Advanced ML models (RF, GBR)
-- 📊 Better visualizations
-- 🎨 Modern dark theme
-- 📈 Improved forecasting
-""")
-
-st.sidebar.markdown("---")
-st.sidebar.caption("Built by Emmanuel Igbokwe • Powered by ML")
 
 # ============================================================
 # 2) CSAF PREDICTED
@@ -1415,9 +1391,6 @@ elif metric_group == "💰 Budget/Enrollment (Bar)":
     fig.update_layout(barmode="group", title=f"{selected_school} — Enrollment")
     st.plotly_chart(fig, use_container_width=True)
 
-# ============================================================
-# 5) BUDGET/ENROLLMENT PREDICTED
-# ============================================================
 elif metric_group == "🔮 Budget/Enrollment Predicted":
     st.markdown("## 🔮 Enrollment Predicted")
 
