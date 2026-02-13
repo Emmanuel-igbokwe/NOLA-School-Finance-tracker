@@ -943,6 +943,7 @@ if metric_group == "Executive Summary (School Report Card)":
           <div class="kpi-sub"><span class="{status_cls}">{status_txt}</span></div>
         </div>
         """
+
     kpi_cards = f"""
       <div class="kpi-grid">
         {kpi_html("Fund Balance Ratio", f"{fb:.1%}" if np.isfinite(fb) else "—", _risk_status("FB Ratio", fb), cls_for("FB Ratio", fb))}
@@ -985,8 +986,8 @@ if metric_group == "Executive Summary (School Report Card)":
             "_Current Assets / Current Liabilities.  Positive numbers indicate enough current assets to pay bills.  •  Best practice ≥ 1.50_"
         )
         fig_cr = make_gauge(
-            value=cr, vmin=0.0, vmax=3.0 if not np.isfinite(cr) else max(3.0, cr*1.1), threshold=1.50, good_direction="gte",
-            value_fmt=".2f", title_text="Current Ratio"
+            value=cr, vmin=0.0, vmax=3.0 if not np.isfinite(cr) else max(3.0, cr*1.1),
+            threshold=1.50, good_direction="gte", value_fmt=".2f", title_text="Current Ratio"
         )
         st.plotly_chart(fig_cr, use_container_width=True)
     with c4:
@@ -1002,52 +1003,132 @@ if metric_group == "Executive Summary (School Report Card)":
         )
         st.plotly_chart(fig_dch, use_container_width=True)
 
-    # ---------- Powerful, plain-English analysis ----------
-    st.markdown("### 📄 Financial Analysis & Actions (This School)")
-    bullets = []
-    def add_line(metric, v):
+    # ---------- CFO-grade narrative (auto-detects school + tailors content) ----------
+    def _fmt(v, metric):
+        return fmt_csaf(metric, v) if np.isfinite(v) else "—"
+
+    def _score_bucket(metric, v):
         s = _risk_status(metric, v)
-        vtxt = (fmt_csaf(metric, v) if np.isfinite(v) else "—")
-        bullets.append(f"- **{metric}**: {vtxt} — **{s}**")
-    add_line("FB Ratio", fb)
-    add_line("Current Ratio", cr)
-    add_line("Unrestricted Days COH", dch)
-    add_line("Liabilities to Assets", la)
-    st.markdown("\n".join(bullets))
+        return {"On Track": 2, "Monitor": 1, "At Risk": 0}.get(s, 1)
 
-    recs = []
-    if np.isfinite(fb) and fb < csaf_best["FB Ratio"]["threshold"]:
-        gap = csaf_best["FB Ratio"]["threshold"] - fb
-        recs += [
-            f"**Fund Balance below floor by ~{gap:.1%}.** Move to structural balance: align staffing to enrollment, freeze non‑essential spend, tighten procurement.",
-            "Accelerate reimbursements/receivables and shorten cash‑conversion cycle.",
-        ]
-    if np.isfinite(cr) and cr < csaf_best["Current Ratio"]["threshold"]:
-        recs += [
-            "**Liquidity risk:** smooth payables, defer non‑critical capex, strengthen A/R collections.",
-            "Pre‑arrange contingency liquidity (LOC) for seasonal tightness.",
-        ]
-    if np.isfinite(dch) and dch < csaf_best["Unrestricted Days COH"]["threshold"]:
-        recs += [
-            "**Cash runway thin:** target ≥ 60 days; expedite reimbursements; adjust disbursement timing; renegotiate vendor terms.",
-        ]
-    if np.isfinite(la) and la > csaf_best["Liabilities to Assets"]["threshold"]:
-        recs += [
-            "**Leverage elevated:** reduce short‑term liabilities; schedule principal pay‑downs; avoid new obligations until ratios recover.",
-        ]
-    if not recs:
-        recs = ["Overall **on track**. Maintain current controls, quarterly monitoring, and enrollment retention discipline."]
+    def _overall_health(fb, cr, dch, la):
+        # Weighted view: liquidity (CR, DCH) & reserves (FB) > leverage (LA)
+        pts  = 0.35 * _score_bucket("Current Ratio", cr)
+        pts += 0.35 * _score_bucket("Unrestricted Days COH", dch)
+        pts += 0.20 * _score_bucket("FB Ratio", fb)
+        pts += 0.10 * _score_bucket("Liabilities to Assets", la)
+        if pts >= 1.6: return "Strong"
+        if pts >= 1.1: return "Stable"
+        if pts >= 0.7: return "Watch"
+        return "At Risk"
 
-    st.markdown("#### Recommended Actions (Next 90 Days)")
-    st.markdown("\n".join([f"- {r}" for r in recs]))
+    def _strengths(fb, cr, dch, la):
+        s = []
+        if np.isfinite(dch) and dch >= csaf_best["Unrestricted Days COH"]["threshold"]:
+            s.append(f"**Cash runway** is healthy at **{_fmt(dch, 'Unrestricted Days COH')}** (≥ 60 days).")
+        if np.isfinite(cr) and cr >= csaf_best["Current Ratio"]["threshold"]:
+            s.append(f"**Short‑term liquidity** solid with **CR {_fmt(cr, 'Current Ratio')}** (≥ 1.50×).")
+        if np.isfinite(fb) and fb >= csaf_best["FB Ratio"]["threshold"]:
+            s.append(f"**Fund balance** at **{_fmt(fb, 'FB Ratio')}** provides cushion against shocks.")
+        if np.isfinite(la) and la <= csaf_best["Liabilities to Assets"]["threshold"]:
+            s.append(f"**Leverage** contained at **{_fmt(la, 'Liabilities to Assets')}** (≤ 0.90).")
+        return s
 
-    # Download (Markdown)
+    def _vulnerabilities(fb, cr, dch, la):
+        v = []
+        if np.isfinite(cr) and cr < csaf_best["Current Ratio"]["threshold"]:
+            v.append(f"**Liquidity tightness**: Current Ratio **{_fmt(cr, 'Current Ratio')}** < 1.50×.")
+        if np.isfinite(dch) and dch < csaf_best["Unrestricted Days COH"]["threshold"]:
+            v.append(f"**Cash runway below floor** at **{_fmt(dch, 'Unrestricted Days COH')}** (< 60 days).")
+        if np.isfinite(fb) and fb < csaf_best["FB Ratio"]["threshold"]:
+            v.append(f"**Fund balance under target** at **{_fmt(fb, 'FB Ratio')}** (< 10%).")
+        if np.isfinite(la) and la > csaf_best["Liabilities to Assets"]["threshold"]:
+            v.append(f"**Elevated leverage** at **{_fmt(la, 'Liabilities to Assets')}** (> 0.90).")
+        return v
+
+    def _tailored_plan(fb, cr, dch, la):
+        plan = []
+        # Liquidity playbook
+        if not np.isfinite(cr) or cr < csaf_best["Current Ratio"]["threshold"]:
+            plan += [
+                "Smooth **payables** across months; avoid large same‑month vendor clusters.",
+                "Defer **non‑critical capex**/purchases until liquidity normalizes.",
+                "Tighten **A/R collections & reimbursements** (move to weekly submissions).",
+                "Pre‑arrange **contingency LOC** sized to 1–1.5× average tight‑month outflows.",
+            ]
+        # Cash runway playbook
+        if not np.isfinite(dch) or dch < csaf_best["Unrestricted Days COH"]["threshold"]:
+            plan += [
+                "Target **≥ 60 days COH**: accelerate grant draws; rebalance disbursement calendars.",
+                "Negotiate **vendor terms** (net‑45/60) where feasible.",
+            ]
+        # Structural balance / reserves
+        if not np.isfinite(fb) or fb < csaf_best["FB Ratio"]["threshold"]:
+            plan += [
+                "Drive **structural balance**: align staffing with live enrollment/retention.",
+                "Freeze **non‑essential spend**; enforce purchase order controls.",
+            ]
+        # Leverage
+        if np.isfinite(la) and la > csaf_best["Liabilities to Assets"]["threshold"]:
+            plan += [
+                "Reduce **short‑term liabilities** and schedule principal pay‑downs.",
+                "Avoid new obligations until liquidity and reserves meet thresholds.",
+            ]
+        # If everything is on track
+        if not plan:
+            plan = [
+                "Maintain **current controls** and monthly cash cadence.",
+                "Review staffing vs. enrollment **each quarter**; keep reserves ≥ policy.",
+            ]
+        return plan
+
+    school_name = selected_school  # auto-detected from the UI selection
+
+    overall = _overall_health(fb, cr, dch, la)
+    strengths = _strengths(fb, cr, dch, la)
+    risks = _vulnerabilities(fb, cr, dch, la)
+    plan = _tailored_plan(fb, cr, dch, la)
+
+    # Executive headline + compact metric line
+    st.markdown(f"""
+### 📌 {school_name}: Executive Financial Health — **{overall}**
+**FB Ratio:** {_fmt(fb, 'FB Ratio')}  •  **CR:** {_fmt(cr, 'Current Ratio')}  •  **Days COH:** {_fmt(dch, 'Unrestricted Days COH')}  •  **Liab/Assets:** {_fmt(la, 'Liabilities to Assets')}
+""")
+
+    if strengths:
+        st.markdown("#### ✅ Strengths")
+        st.markdown("\n".join([f"- {s}" for s in strengths]))
+    if risks:
+        st.markdown("#### ⚠️ Vulnerabilities")
+        st.markdown("\n".join([f"- {r}" for r in risks]))
+
+    st.markdown("#### 🗓️ 90‑Day CFO Plan (Prioritized)")
+    seen = set(); plan_unique = []
+    for item in plan:
+        if item not in seen:
+            plan_unique.append(item); seen.add(item)
+    st.markdown("\n".join([f"1. {p}" if i == 0 else f"{i+1}. {p}" for i, p in enumerate(plan_unique)]))
+
+    # ---------- Download (Markdown) ----------
     md_lines = [
-        f"# Executive Summary — {selected_school}",
+        f"# Executive Summary — {school_name}",
+        f"**Overall Health:** {overall}",
+        "",
         "## Current Status",
-        *[li.replace("- ", "* ") for li in bullets],
-        "## Recommended Actions (Next 90 Days)",
-        *[f"* {r}" for r in recs],
+        f"* FB Ratio: {_fmt(fb, 'FB Ratio')}",
+        f"* Current Ratio: {_fmt(cr, 'Current Ratio')}",
+        f"* Days COH: {_fmt(dch, 'Unrestricted Days COH')}",
+        f"* Liabilities/Assets: {_fmt(la, 'Liabilities to Assets')}",
+        "",
+        "## Strengths",
+        *(["* " + s for s in strengths] if strengths else ["* —"]),
+        "",
+        "## Vulnerabilities",
+        *(["* " + r for r in risks] if risks else ["* —"]),
+        "",
+        "## 90‑Day CFO Plan",
+        *[f"{i+1}. {p}" for i, p in enumerate(plan_unique)],
+        "",
         "## Thresholds",
         "* FB Ratio ≥ 10%",
         "* Current Ratio ≥ 1.50×",
@@ -1057,7 +1138,7 @@ if metric_group == "Executive Summary (School Report Card)":
     st.download_button(
         "⬇ Download Report Card (Markdown)",
         data="\n".join(md_lines),
-        file_name=f"{selected_school.replace(' ','_').lower()}_executive_report_card.md",
+        file_name=f"{school_name.replace(' ','_').lower()}_executive_report_card.md",
         mime="text/markdown"
     )
 
@@ -1888,3 +1969,4 @@ else:
 
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
+
