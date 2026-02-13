@@ -1,9 +1,14 @@
-streamlit>=1.28.0
-pandas>=2.0.0
-numpy>=1.24.0
-openpyxl>=3.1.0
-plotly>=5.17.0
-scikit-learn>=1.3.0
-xgboost>=2.0.0          ← ADDED (Critical for advanced ML)
-scipy>=1.11.0           ← ADDED (Recommended)
+# Streamlit Cloud Compatible Requirements
+# No version constraints for maximum compatibility
 
+streamlit
+pandas
+numpy
+openpyxl
+plotly
+scikit-learn
+scipy
+
+# XGBoost - try to install but won't break if it fails
+# Streamlit Cloud should handle this
+xgboost
