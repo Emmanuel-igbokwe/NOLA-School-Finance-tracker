@@ -136,7 +136,7 @@ if os.path.exists(logo_path):
 
         <div class="nola-wrap">
           <div class="nola-header">
-            <img class="spin" src="data:image/png;base64,{encoded_logo}" />
+            <img class="spin" src="data:image/png;base64,{encoded_logo}">
             <div>
               <div class="nola-title">Welcome to NOLA Public Schools Finance Accountability App</div>
               <div class="nola-sub">NOLA Schools Financial Tracker • Built by Emmanuel Igbokwe</div>
@@ -562,9 +562,6 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
     if q is None:
         season_period = 1
 
-    # ----------------------------
-    # Baselines
-    # ----------------------------
     def seasonal_naive(y_hist, q_hist, h):
         y_hist = np.asarray(y_hist, dtype=float)
         preds = []
@@ -607,9 +604,6 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
             out = np.clip(out, 0.0, 1.5)
         return out
 
-    # ----------------------------
-    # Robust seasonal regression
-    # ----------------------------
     def robust_seasonal_regression(y_hist, q_hist, h):
         ylog = _safe_log1p(y_hist)
         t = np.arange(len(ylog)).reshape(-1, 1).astype(float)
@@ -630,9 +624,6 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
             Xf = np.hstack([tf, _quarter_dummies(qf, season_period=season_period)])
         return _safe_expm1(mdl.predict(Xf))
 
-    # ----------------------------
-    # Trend × Seasonal Index
-    # ----------------------------
     def trend_times_seasonal_index(y_hist, q_hist, h):
         y_hist = np.asarray(y_hist, dtype=float)
         t = np.arange(len(y_hist)).reshape(-1, 1).astype(float)
@@ -659,9 +650,6 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
             preds.append(float(base[i] * idx_map.get(int(q_last), 1.0)))
         return np.asarray(preds, dtype=float)
 
-    # ----------------------------
-    # Ensemble (weighted)
-    # ----------------------------
     def ensemble_3(y_hist, q_hist, h):
         p1 = seasonal_naive_drift(y_hist, q_hist, h)
         p2 = robust_seasonal_regression(y_hist, q_hist, h)
@@ -669,9 +657,6 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
         w = np.array([0.55, 0.30, 0.15], dtype=float)
         return np.average(np.vstack([p1, p2, p3]), axis=0, weights=w)
 
-    # ----------------------------
-    # ML models (supervised lag)
-    # ----------------------------
     def hgbr_lag(y_hist, q_hist, h):
         mdl = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.08, max_iter=900, random_state=42)
         return _iterative_forecast_supervised(
@@ -753,7 +738,6 @@ def forecast_timeseries(y, q=None, horizon=6, model_choice="Auto (min error)", s
     if is_ratio:
         y_future = np.clip(y_future, 0.0, 1.5)
 
-    # final guard (metric-aware)
     if is_ratio:
         max_up, max_down = 1.15, 0.85
     else:
@@ -810,7 +794,7 @@ def bootstrap_intervals(y_hist, q_hist, horizon, model_fn, season_period=3, n_si
 st.sidebar.header("🔎 Filters")
 
 modes = [
-    "Executive Summary (School Report Card)",  # KPI-first executive view
+    "Executive Summary (School Report Card)",
     "CSAF Metrics (4-panel)",
     "CSAF Predicted",
     "Other Metrics",
@@ -830,35 +814,44 @@ def parse_q(label: str):
     return int(m.group(2)) if m else None
 
 # ============================================================
-# ---------- New helper: high-contrast half-dial gauge ----------
+# ---------- NEW: High‑contrast half‑dial gauge (crash‑proof) ----------
+#   * No 'pointer' key (fixes ValueError)
+#   * Auto‑scales vmax so big values (e.g., 214%) fit nicely
+#   * Blue threshold tick
 # ============================================================
+def _threshold_label(value_fmt, thr):
+    if value_fmt.endswith("%"):
+        return f"{thr:.0%}"
+    # choose 2 decimals for ratios, comma for counts
+    return f"{thr:.2f}" if thr < 10 else f"{thr:,.0f}"
+
 def make_gauge(value, vmin, vmax, threshold, good_direction, value_fmt, title_text):
-    """
-    value: float
-    vmin/vmax: numeric scale
-    threshold: numeric threshold to mark (blue tick)
-    good_direction: 'gte' or 'lte'
-    value_fmt: e.g. '.0%', '.2f', ',.0f'
-    title_text: str (not shown inside gauge; we place explanation above)
-    """
-    # Zones (red vs green) by direction
+    # Auto-expand vmax so the needle always fits
+    if np.isfinite(value):
+        vmax_eff = max(vmax, float(value) * 1.10)  # 10% headroom above observed value
+    else:
+        vmax_eff = vmax
+
+    # Keep threshold in-range
+    thr_eff = min(max(threshold, vmin), vmax_eff)
+
+    # Red/Green zones by direction
     if good_direction == "gte":
         steps = [
-            {"range": [vmin, threshold], "color": "#e11d48"},   # red
-            {"range": [threshold, vmax], "color": "#15803d"},   # green
+            {"range": [vmin, thr_eff], "color": "#e11d48"},   # red
+            {"range": [thr_eff, vmax_eff], "color": "#15803d"},   # green
         ]
     else:  # lte
         steps = [
-            {"range": [vmin, threshold], "color": "#15803d"},   # green
-            {"range": [threshold, vmax], "color": "#e11d48"},   # red
+            {"range": [vmin, thr_eff], "color": "#15803d"},   # green
+            {"range": [thr_eff, vmax_eff], "color": "#e11d48"},   # red
         ]
 
-    # Display threshold as a single blue tick; hide regular ticks
     axis_conf = dict(
-        range=[vmin, vmax],
+        range=[vmin, vmax_eff],
         tickmode="array",
-        tickvals=[threshold],
-        ticktext=[f"{threshold:.0%}" if value_fmt.endswith('%') else (f"{threshold:.2f}" if isinstance(threshold, float) else f"{threshold}")],
+        tickvals=[thr_eff],
+        ticktext=[_threshold_label(value_fmt, thr_eff)],
         tickcolor="#0ea5e9",
         ticklen=8,
         ticks="outside",
@@ -866,7 +859,7 @@ def make_gauge(value, vmin, vmax, threshold, good_direction, value_fmt, title_te
 
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
-        value=(0 if not np.isfinite(value) else value),
+        value=(0 if not np.isfinite(value) else float(value)),
         number={
             "valueformat": value_fmt,
             "font": {"size": 34, "color": "#14b8a6", "family": "Arial Black"}
@@ -874,17 +867,18 @@ def make_gauge(value, vmin, vmax, threshold, good_direction, value_fmt, title_te
         gauge={
             "shape": "angular",
             "axis": axis_conf,
-            "bar": {"color": "rgba(0,0,0,0)"},                    # hide filled arc
-            "pointer": {"color": "#111111"},                      # black needle
+            "bar": {"color": "rgba(0,0,0,0)"},   # hide filled arc; leave only needle
+            # (No 'pointer' key → avoids ValueError)
             "steps": steps,
-            "threshold": {                                        # blue threshold tick
+            "threshold": {
                 "line": {"color": "#0ea5e9", "width": 3},
                 "thickness": 0.75,
-                "value": threshold
+                "value": thr_eff
             }
         },
         domain={"x": [0, 1], "y": [0, 1]},
     ))
+
     fig = apply_plot_style(fig, height=260)
     fig.update_layout(
         paper_bgcolor=PLOT_BG,
@@ -991,7 +985,7 @@ if metric_group == "Executive Summary (School Report Card)":
             "_Current Assets / Current Liabilities.  Positive numbers indicate enough current assets to pay bills.  •  Best practice ≥ 1.50_"
         )
         fig_cr = make_gauge(
-            value=cr, vmin=0.0, vmax=6.0, threshold=1.50, good_direction="gte",
+            value=cr, vmin=0.0, vmax=3.0 if not np.isfinite(cr) else max(3.0, cr*1.1), threshold=1.50, good_direction="gte",
             value_fmt=".2f", title_text="Current Ratio"
         )
         st.plotly_chart(fig_cr, use_container_width=True)
@@ -1000,8 +994,10 @@ if metric_group == "Executive Summary (School Report Card)":
             "**Unrestricted Cash on Hand: Enough cash to pay bills for 60+ days if $0 incoming cash?**  \n"
             "_Unrestricted Cash / ((Total Exp. − Depreciation)/365).  •  Best practice ≥ 60_"
         )
+        # Dynamic max for very high cash days (e.g., 765)
+        vmax_dch = 300.0 if not np.isfinite(dch) else max(300.0, math.ceil(dch/50.0)*50.0)
         fig_dch = make_gauge(
-            value=dch, vmin=0.0, vmax=300.0, threshold=60.0, good_direction="gte",
+            value=dch, vmin=0.0, vmax=vmax_dch, threshold=60.0, good_direction="gte",
             value_fmt=",.0f", title_text="Unrestricted Days COH"
         )
         st.plotly_chart(fig_dch, use_container_width=True)
@@ -1179,7 +1175,7 @@ elif metric_group == "CSAF Metrics (4-panel)":
     )
 
 # ============================================================
-# 2) CSAF PREDICTED — BAR ONLY (Freeze + Unfrozen modes)
+# 2) CSAF PREDICTED — BAR ONLY
 # ============================================================
 elif metric_group == "CSAF Predicted":
     st.markdown("## 🔮 CSAF Predicted (Freeze or Unfrozen Forecast)")
@@ -1661,7 +1657,6 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             if need_oct and (oct_future is not None):
                 feb_future = (oct_future * retention).astype(float)
 
-                # Optional simple band (counts only)
                 if show_intervals:
                     band = 0.015  # ±1.5%
                     combined_frames.append(pd.DataFrame({
