@@ -12,4 +12,6 @@ scipy
 # XGBoost - try to install but won't break if it fails
 # Streamlit Cloud should handle this
 xgboost
+reportlab==3.6.12
 kaleido==0.2.1
+
