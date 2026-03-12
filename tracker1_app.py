@@ -16,6 +16,7 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.ensemble import RandomForestClassifier   # ← NEW (Predictive Risk Model)
 
 # ============================================================
 # THEME / BACKGROUND
@@ -35,9 +36,9 @@ st.markdown(
       /* remove top whitespace + keep content centered */
       header[data-testid="stHeader"] {{ background: {APP_BG}; }}
       .block-container {{
-        padding-top: 1.15rem !important;     /* prevents top header/logo cut */
+        padding-top: 1.15rem !important;
         padding-bottom: 2rem !important;
-        max-width: 1250px !important;        /* stop ultra-wide scrolling */
+        max-width: 1250px !important;
       }}
 
       /* sidebar readability */
@@ -61,7 +62,7 @@ st.markdown(
         .kpi-grid {{ grid-template-columns: repeat(2, 1fr); }}
       }}
       .kpi-card {{
-        background: #1a1f2e10;  /* faint contrast */
+        background: #1a1f2e10;
         border: 1px solid rgba(0,0,0,0.10);
         border-radius: 14px;
         padding: 16px 16px 14px 16px;
@@ -171,11 +172,11 @@ END_FORECAST_FY = 28
 
 # FY colors
 fy_color_map = {
-    "FY22": "#2E6B3C",  # green
-    "FY23": "#E15759",  # red
-    "FY24": "#1F77B4",  # blue
-    "FY25": "#7B61FF",  # purple
-    "FY26": "#FF4FA3",  # pink
+    "FY22": "#2E6B3C",
+    "FY23": "#E15759",
+    "FY24": "#1F77B4",
+    "FY25": "#7B61FF",
+    "FY26": "#FF4FA3",
 }
 
 # CSAF prediction colors
@@ -459,7 +460,7 @@ def _tscv_mae(fit_predict_fn, y, min_train=5, splits=3):
     for tr_idx, te_idx in tscv.split(np.arange(n)):
         if len(tr_idx) < min_train:
             continue
-        te0 = np.array([te_idx[0]], dtype=int)   # score 1-step ahead only
+        te0 = np.array([te_idx[0]], dtype=int)
         yhat = fit_predict_fn(tr_idx, te0)
         maes.append(mean_absolute_error(y[te0], yhat))
     return float(np.mean(maes)) if maes else np.inf
@@ -789,7 +790,229 @@ def bootstrap_intervals(y_hist, q_hist, horizon, model_fn, season_period=3, n_si
     return p10, p50, p90
 
 # ============================================================
-# SIDEBAR NAV  (Portfolio option removed)
+# PREDICTIVE RISK MODEL — HELPER FUNCTIONS  (NEW)
+# ============================================================
+
+# ── Centralized scoring thresholds — easy to adjust in one place ──
+# Each tuple: (column, operator, threshold, points, human-readable label)
+RISK_CONDITIONS = [
+    ("FB Ratio",                        "lt",  0.05,       3, "Fund balance ratio is critically low (< 5%)"),
+    ("FB Ratio",                        "lt",  0.10,       2, "Fund balance ratio is below the 10% target"),
+    ("Liabilities to Assets",           "gt",  0.90,       3, "Liabilities-to-assets ratio is critically elevated (> 0.90)"),
+    ("Liabilities to Assets",           "gt",  0.75,       2, "Liabilities-to-assets ratio is above the moderate threshold (> 0.75)"),
+    ("Current Ratio",                   "lt",  1.00,       3, "Current ratio is below 1.0 — bills may not be payable"),
+    ("Current Ratio",                   "lt",  1.50,       2, "Current ratio is below the 1.50 best-practice floor"),
+    ("Unrestricted Days COH",           "lt",  40.0,       3, "Cash on hand is critically low (< 40 days)"),
+    ("Unrestricted Days COH",           "lt",  60.0,       2, "Cash on hand is below the 60-day best-practice threshold"),
+    ("Unrestricted Cash & Equivalents", "lt",  500_000,    2, "Unrestricted cash is below $500,000"),
+]
+
+_OPS = {
+    "lt":  lambda v, t: v < t,
+    "gt":  lambda v, t: v > t,
+    "lte": lambda v, t: v <= t,
+    "gte": lambda v, t: v >= t,
+}
+
+# Core financial columns used as ML features
+RISK_FEATURE_COLS = [
+    "FB Ratio",
+    "Liabilities to Assets",
+    "Current Ratio",
+    "Unrestricted Days COH",
+    "Unrestricted Cash & Equivalents",
+    "Total Revenue",
+    "Total Expenses",
+    "Current Assets",
+    "Current Liabilities",
+    "Total Liabilities",
+    "Total Assets",
+    "Salaries",
+    "Employee Benefits",
+]
+
+
+def _score_row(row: pd.Series) -> int:
+    """Return raw integer risk score for a single quarter row."""
+    score = 0
+    for col, op, thr, pts, _ in RISK_CONDITIONS:
+        v = row.get(col, np.nan)
+        if pd.isna(v):
+            continue
+        if _OPS[op](float(v), thr):
+            score += pts
+    # Expense > Revenue → +2 additional points
+    rev = row.get("Total Revenue", np.nan)
+    exp = row.get("Total Expenses", np.nan)
+    if pd.notna(rev) and pd.notna(exp) and float(exp) > float(rev):
+        score += 2
+    return score
+
+
+def _score_to_label(score: int) -> str:
+    """Convert numeric score to Low / Medium / High tier."""
+    if score >= 8:
+        return "High"
+    if score >= 4:
+        return "Medium"
+    return "Low"
+
+
+def _build_risk_dataset(df_src: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build the quarter-level risk dataset with lag and change features.
+    Operates entirely on a copy of df; the original is never modified.
+    """
+    df_work = df_src.copy()
+
+    # Coerce all feature columns to numeric
+    feat_cols_present = [c for c in RISK_FEATURE_COLS if c in df_work.columns]
+    for c in feat_cols_present:
+        df_work[c] = pd.to_numeric(df_work[c], errors="coerce")
+
+    # Sort by school + fiscal quarter
+    df_work["_sort_key"] = df_work["Fiscal Year"].apply(sort_fy)
+    df_work = df_work.sort_values(["Schools", "_sort_key"]).reset_index(drop=True)
+
+    # Current-quarter risk score & label
+    df_work["_risk_score"] = df_work.apply(_score_row, axis=1)
+    df_work["_risk_label"] = df_work["_risk_score"].apply(_score_to_label)
+
+    # Expense-over-revenue flag (used in explanations)
+    if "Total Revenue" in df_work.columns and "Total Expenses" in df_work.columns:
+        df_work["_expense_over_revenue"] = (
+            df_work["Total Expenses"] > df_work["Total Revenue"]
+        ).astype(int)
+    else:
+        df_work["_expense_over_revenue"] = 0
+
+    # Per-school lag (lag1, lag2) and quarter-over-quarter change features
+    rows_out = []
+    for school, grp in df_work.groupby("Schools", sort=False):
+        grp = grp.sort_values("_sort_key").reset_index(drop=True)
+        for i in range(len(grp)):
+            row = grp.iloc[i]
+            feat_row = {
+                "Schools":               school,
+                "Fiscal Year":           row["Fiscal Year"],
+                "_sort_key":             row["_sort_key"],
+                "_risk_label":           row["_risk_label"],
+                "_risk_score":           row["_risk_score"],
+                "_expense_over_revenue": row.get("_expense_over_revenue", 0),
+            }
+            for c in feat_cols_present:
+                v0 = row.get(c, np.nan)
+                v1 = grp.iloc[i - 1][c] if i >= 1 else np.nan
+                v2 = grp.iloc[i - 2][c] if i >= 2 else np.nan
+                feat_row[c]            = v0
+                feat_row[f"{c}_lag1"]  = v1
+                feat_row[f"{c}_lag2"]  = v2
+                feat_row[f"{c}_chg"]   = (
+                    (float(v0) - float(v1))
+                    if pd.notna(v0) and pd.notna(v1) else np.nan
+                )
+            rows_out.append(feat_row)
+
+    df_feat = pd.DataFrame(rows_out)
+
+    # Shift risk label within each school → next-quarter target
+    targets = []
+    for school, grp in df_feat.groupby("Schools", sort=False):
+        grp = grp.sort_values("_sort_key").reset_index(drop=True)
+        shifted = grp["_risk_label"].shift(-1)
+        for idx2 in range(len(grp)):
+            targets.append({
+                "Schools":      school,
+                "Fiscal Year":  grp.loc[idx2, "Fiscal Year"],
+                "_next_q_risk": shifted.iloc[idx2],
+            })
+
+    df_targets = pd.DataFrame(targets)
+    df_feat = pd.merge(df_feat, df_targets, on=["Schools", "Fiscal Year"], how="left")
+
+    return df_feat
+
+
+def _train_risk_model(df_feat: pd.DataFrame):
+    """
+    Train RandomForestClassifier on all rows where next-quarter label is known.
+    Returns (fitted_model, feature_column_names, class_labels).
+    """
+    df_train = df_feat.dropna(subset=["_next_q_risk"]).copy()
+    if df_train.empty:
+        return None, [], []
+
+    exclude = {
+        "Schools", "Fiscal Year", "_sort_key",
+        "_risk_label", "_risk_score", "_next_q_risk",
+        "_expense_over_revenue",
+    }
+    ml_cols = [c for c in df_train.columns if c not in exclude]
+
+    X = df_train[ml_cols].apply(pd.to_numeric, errors="coerce").fillna(0).values
+    y_labels = df_train["_next_q_risk"].values
+
+    clf = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=6,
+        min_samples_leaf=2,
+        random_state=42,
+        class_weight="balanced",
+    )
+    clf.fit(X, y_labels)
+    return clf, ml_cols, clf.classes_
+
+
+def _explain_risk(row: pd.Series, feat_cols_present: list) -> list:
+    """
+    Return readable business-language explanation strings for a school's risk row.
+    Checks both absolute threshold violations and quarter-over-quarter deterioration.
+    """
+    explanations = []
+
+    # Absolute threshold violations
+    for col, op, thr, _, label in RISK_CONDITIONS:
+        if col not in row.index:
+            continue
+        v = row.get(col, np.nan)
+        if pd.isna(v):
+            continue
+        if _OPS[op](float(v), thr):
+            explanations.append(label)
+
+    # Revenue vs Expense gap
+    rev = row.get("Total Revenue", np.nan)
+    exp = row.get("Total Expenses", np.nan)
+    if pd.notna(rev) and pd.notna(exp) and float(exp) > float(rev):
+        gap = float(exp) - float(rev)
+        explanations.append(f"Total expenses exceed revenue by ${gap:,.0f}")
+
+    # Quarter-over-quarter deterioration signals
+    qoq_checks = [
+        ("FB Ratio",              "down", "Fund balance ratio declined from prior quarter"),
+        ("Current Ratio",         "down", "Current ratio declined from prior quarter"),
+        ("Unrestricted Days COH", "down", "Cash on hand declined from prior quarter"),
+        ("Total Revenue",         "down", "Revenue declined from prior quarter"),
+        ("Total Expenses",        "up",   "Total expenses increased from prior quarter"),
+        ("Liabilities to Assets", "up",   "Liabilities-to-assets ratio worsened from prior quarter"),
+    ]
+    for col, direction, msg in qoq_checks:
+        chg_col = f"{col}_chg"
+        if chg_col not in row.index:
+            continue
+        chg = row.get(chg_col, np.nan)
+        if pd.isna(chg):
+            continue
+        if direction == "down" and float(chg) < 0:
+            explanations.append(msg)
+        if direction == "up" and float(chg) > 0:
+            explanations.append(msg)
+
+    return explanations if explanations else ["No specific risk factors flagged for this quarter."]
+
+
+# ============================================================
+# SIDEBAR NAV
 # ============================================================
 st.sidebar.header("🔎 Filters")
 
@@ -798,6 +1021,7 @@ modes = [
     "CSAF Metrics (4-panel)",
     "CSAF Predicted",
     "Other Metrics",
+    "Predictive Risk Model",          # ← NEW
 ]
 if not df_budget_long.empty:
     modes += ["Budget/Enrollment (Bar)", "Budget/Enrollment Predicted (Bar)"]
@@ -814,37 +1038,30 @@ def parse_q(label: str):
     return int(m.group(2)) if m else None
 
 # ============================================================
-# ---------- NEW: High‑contrast half‑dial gauge (crash‑proof) ----------
-#   * No 'pointer' key (fixes ValueError)
-#   * Auto‑scales vmax so big values (e.g., 214%) fit nicely
-#   * Blue threshold tick
+# High-contrast half-dial gauge (crash-proof)
 # ============================================================
 def _threshold_label(value_fmt, thr):
     if value_fmt.endswith("%"):
         return f"{thr:.0%}"
-    # choose 2 decimals for ratios, comma for counts
     return f"{thr:.2f}" if thr < 10 else f"{thr:,.0f}"
 
 def make_gauge(value, vmin, vmax, threshold, good_direction, value_fmt, title_text):
-    # Auto-expand vmax so the needle always fits
     if np.isfinite(value):
-        vmax_eff = max(vmax, float(value) * 1.10)  # 10% headroom above observed value
+        vmax_eff = max(vmax, float(value) * 1.10)
     else:
         vmax_eff = vmax
 
-    # Keep threshold in-range
     thr_eff = min(max(threshold, vmin), vmax_eff)
 
-    # Red/Green zones by direction
     if good_direction == "gte":
         steps = [
-            {"range": [vmin, thr_eff], "color": "#e11d48"},   # red
-            {"range": [thr_eff, vmax_eff], "color": "#15803d"},   # green
+            {"range": [vmin, thr_eff], "color": "#e11d48"},
+            {"range": [thr_eff, vmax_eff], "color": "#15803d"},
         ]
-    else:  # lte
+    else:
         steps = [
-            {"range": [vmin, thr_eff], "color": "#15803d"},   # green
-            {"range": [thr_eff, vmax_eff], "color": "#e11d48"},   # red
+            {"range": [vmin, thr_eff], "color": "#15803d"},
+            {"range": [thr_eff, vmax_eff], "color": "#e11d48"},
         ]
 
     axis_conf = dict(
@@ -867,8 +1084,7 @@ def make_gauge(value, vmin, vmax, threshold, good_direction, value_fmt, title_te
         gauge={
             "shape": "angular",
             "axis": axis_conf,
-            "bar": {"color": "rgba(0,0,0,0)"},   # hide filled arc; leave only needle
-            # (No 'pointer' key → avoids ValueError)
+            "bar": {"color": "rgba(0,0,0,0)"},
             "steps": steps,
             "threshold": {
                 "line": {"color": "#0ea5e9", "width": 3},
@@ -888,20 +1104,19 @@ def make_gauge(value, vmin, vmax, threshold, good_direction, value_fmt, title_te
     return fig
 
 # ============================================================
-# 0) EXECUTIVE SUMMARY — SCHOOL REPORT CARD (KPI strip + NEW GAUGES ONLY)
+# 0) EXECUTIVE SUMMARY — SCHOOL REPORT CARD
 # ============================================================
 if metric_group == "Executive Summary (School Report Card)":
     st.markdown("## 🏫 Executive Summary — School Report Card")
 
     selected_school = st.sidebar.selectbox("Select School", school_options)
 
-    # --- Helpers (local) ---
     def _risk_status(metric_name: str, v: float) -> str:
         if v is None or not np.isfinite(v):
             return "No Data"
         thr = csaf_best[metric_name]["threshold"]
         direction = csaf_best[metric_name]["direction"]
-        band = 0.05 * thr if thr > 1 else 0.02  # tiny tolerance band
+        band = 0.05 * thr if thr > 1 else 0.02
         if direction == "gte":
             if v >= thr: return "On Track"
             if v >= (thr - band): return "Monitor"
@@ -923,14 +1138,12 @@ if metric_group == "Executive Summary (School Report Card)":
             out[met] = float(vals.iloc[-1]) if len(vals) else np.nan
         return out
 
-    # Build latest snapshot
     latest = _latest_for_school(selected_school)
     fb  = latest.get("FB Ratio", np.nan)
     cr  = latest.get("Current Ratio", np.nan)
     dch = latest.get("Unrestricted Days COH", np.nan)
     la  = latest.get("Liabilities to Assets", np.nan)
 
-    # ---------- KPI BAR (cards at the very top) ----------
     def cls_for(metric, v):
         s = _risk_status(metric, v)
         return "kpi-good" if s == "On Track" else ("kpi-warn" if s == "Monitor" else "kpi-bad")
@@ -954,8 +1167,6 @@ if metric_group == "Executive Summary (School Report Card)":
     """
     st.markdown(kpi_cards, unsafe_allow_html=True)
 
-    # ---------- Explanations + NEW GAUGES (NO line chart) ----------
-    # Row 1
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(
@@ -978,7 +1189,6 @@ if metric_group == "Executive Summary (School Report Card)":
         )
         st.plotly_chart(fig_la, use_container_width=True)
 
-    # Row 2
     c3, c4 = st.columns(2)
     with c3:
         st.markdown(
@@ -995,7 +1205,6 @@ if metric_group == "Executive Summary (School Report Card)":
             "**Unrestricted Cash on Hand: Enough cash to pay bills for 60+ days if $0 incoming cash?**  \n"
             "_Unrestricted Cash / ((Total Exp. − Depreciation)/365).  •  Best practice ≥ 60_"
         )
-        # Dynamic max for very high cash days (e.g., 765)
         vmax_dch = 300.0 if not np.isfinite(dch) else max(300.0, math.ceil(dch/50.0)*50.0)
         fig_dch = make_gauge(
             value=dch, vmin=0.0, vmax=vmax_dch, threshold=60.0, good_direction="gte",
@@ -1003,7 +1212,6 @@ if metric_group == "Executive Summary (School Report Card)":
         )
         st.plotly_chart(fig_dch, use_container_width=True)
 
-    # ---------- CFO-grade narrative (auto-detects school + tailors content) ----------
     def _fmt(v, metric):
         return fmt_csaf(metric, v) if np.isfinite(v) else "—"
 
@@ -1012,7 +1220,6 @@ if metric_group == "Executive Summary (School Report Card)":
         return {"On Track": 2, "Monitor": 1, "At Risk": 0}.get(s, 1)
 
     def _overall_health(fb, cr, dch, la):
-        # Weighted view: liquidity (CR, DCH) & reserves (FB) > leverage (LA)
         pts  = 0.35 * _score_bucket("Current Ratio", cr)
         pts += 0.35 * _score_bucket("Unrestricted Days COH", dch)
         pts += 0.20 * _score_bucket("FB Ratio", fb)
@@ -1048,7 +1255,6 @@ if metric_group == "Executive Summary (School Report Card)":
 
     def _tailored_plan(fb, cr, dch, la):
         plan = []
-        # Liquidity playbook
         if not np.isfinite(cr) or cr < csaf_best["Current Ratio"]["threshold"]:
             plan += [
                 "Smooth **payables** across months; avoid large same‑month vendor clusters.",
@@ -1056,25 +1262,21 @@ if metric_group == "Executive Summary (School Report Card)":
                 "Tighten **A/R collections & reimbursements** (move to weekly submissions).",
                 "Pre‑arrange **contingency LOC** sized to 1–1.5× average tight‑month outflows.",
             ]
-        # Cash runway playbook
         if not np.isfinite(dch) or dch < csaf_best["Unrestricted Days COH"]["threshold"]:
             plan += [
                 "Target **≥ 60 days COH**: accelerate grant draws; rebalance disbursement calendars.",
                 "Negotiate **vendor terms** (net‑45/60) where feasible.",
             ]
-        # Structural balance / reserves
         if not np.isfinite(fb) or fb < csaf_best["FB Ratio"]["threshold"]:
             plan += [
                 "Drive **structural balance**: align staffing with live enrollment/retention.",
                 "Freeze **non‑essential spend**; enforce purchase order controls.",
             ]
-        # Leverage
         if np.isfinite(la) and la > csaf_best["Liabilities to Assets"]["threshold"]:
             plan += [
                 "Reduce **short‑term liabilities** and schedule principal pay‑downs.",
                 "Avoid new obligations until liquidity and reserves meet thresholds.",
             ]
-        # If everything is on track
         if not plan:
             plan = [
                 "Maintain **current controls** and monthly cash cadence.",
@@ -1082,14 +1284,12 @@ if metric_group == "Executive Summary (School Report Card)":
             ]
         return plan
 
-    school_name = selected_school  # auto-detected from the UI selection
+    school_name = selected_school
+    overall    = _overall_health(fb, cr, dch, la)
+    strengths  = _strengths(fb, cr, dch, la)
+    risks      = _vulnerabilities(fb, cr, dch, la)
+    plan       = _tailored_plan(fb, cr, dch, la)
 
-    overall = _overall_health(fb, cr, dch, la)
-    strengths = _strengths(fb, cr, dch, la)
-    risks = _vulnerabilities(fb, cr, dch, la)
-    plan = _tailored_plan(fb, cr, dch, la)
-
-    # Executive headline + compact metric line
     st.markdown(f"""
 ### 📌 {school_name}: Executive Financial Health — **{overall}**
 **FB Ratio:** {_fmt(fb, 'FB Ratio')}  •  **CR:** {_fmt(cr, 'Current Ratio')}  •  **Days COH:** {_fmt(dch, 'Unrestricted Days COH')}  •  **Liab/Assets:** {_fmt(la, 'Liabilities to Assets')}
@@ -1109,7 +1309,6 @@ if metric_group == "Executive Summary (School Report Card)":
             plan_unique.append(item); seen.add(item)
     st.markdown("\n".join([f"1. {p}" if i == 0 else f"{i+1}. {p}" for i, p in enumerate(plan_unique)]))
 
-    # ---------- Download (Markdown) ----------
     md_lines = [
         f"# Executive Summary — {school_name}",
         f"**Overall Health:** {overall}",
@@ -1199,9 +1398,7 @@ elif metric_group == "CSAF Metrics (4-panel)":
             sub = dd[dd["FY Group"] == fygrp]
             if sub.empty:
                 continue
-
             show_leg = (r == 1 and c == 1)
-
             fig.add_trace(
                 go.Bar(
                     x=sub["Fiscal Year"],
@@ -1282,9 +1479,7 @@ elif metric_group == "CSAF Predicted":
         train_end_label = freeze_at
     else:
         train_end_label = last_actual_qtr
-        st.sidebar.info(
-            f"Unfrozen mode uses all actuals up to: **{train_end_label}**"
-        )
+        st.sidebar.info(f"Unfrozen mode uses all actuals up to: **{train_end_label}**")
 
     horizon_q = st.sidebar.slider("🔮 Forecast horizon (quarters)", 3, 12, 6)
 
@@ -1307,8 +1502,8 @@ elif metric_group == "CSAF Predicted":
         "📊 Show interval forecast (Bootstrap P10–P50–P90)", value=False
     )
     n_sims = st.sidebar.slider("🎲 Bootstrap simulations", 200, 800, 300) if show_intervals else 300
-    p_lo = st.sidebar.slider("📉 Lower percentile", 5, 25, 10) if show_intervals else 10
-    p_hi = st.sidebar.slider("📈 Upper percentile", 75, 95, 90) if show_intervals else 90
+    p_lo   = st.sidebar.slider("📉 Lower percentile", 5, 25, 10) if show_intervals else 10
+    p_hi   = st.sidebar.slider("📈 Upper percentile", 75, 95, 90) if show_intervals else 90
 
     show_model_table = st.sidebar.checkbox("Show model error table", value=False)
 
@@ -1416,7 +1611,6 @@ elif metric_group == "CSAF Predicted":
             season_period=3, n_sims=n_sims, p_lo=p_lo, p_hi=p_hi,
             is_ratio=is_ratio
         )
-
         fig.add_trace(go.Scatter(
             x=future_labels + future_labels[::-1],
             y=list(p90) + list(p10[::-1]),
@@ -1427,7 +1621,6 @@ elif metric_group == "CSAF Predicted":
             showlegend=True,
             opacity=0.20
         ))
-
         fig.add_trace(go.Scatter(
             x=future_labels,
             y=p50,
@@ -1450,7 +1643,6 @@ elif metric_group == "CSAF Predicted":
         margin=dict(t=210, r=40, b=90, l=60)
     )
     fig.update_traces(cliponaxis=False)
-
     st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
@@ -1466,7 +1658,7 @@ elif metric_group == "Budget/Enrollment (Bar)":
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options_budget)
 
     metrics_all = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
-    available = sorted(df_budget_long["Metric"].dropna().unique())
+    available   = sorted(df_budget_long["Metric"].dropna().unique())
     metrics_all = [m for m in metrics_all if m in available]
 
     selected_metrics = st.sidebar.multiselect(
@@ -1511,30 +1703,18 @@ elif metric_group == "Budget/Enrollment (Bar)":
             textposition="outside",
         ))
     fig.update_layout(
-        title=dict(
-            text=f"{selected_school} — Enrollment (Actuals)",
-            x=0.01,
-            y=0.98
-        ),
+        title=dict(text=f"{selected_school} — Enrollment (Actuals)", x=0.01, y=0.98),
         barmode="group",
         bargap=BARGAP,
         bargroupgap=BARGROUPGAP,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.18,
-            xanchor="left",
-            x=0.01
-        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.18, xanchor="left", x=0.01),
         margin=dict(t=170, r=40, b=80, l=60)
     )
-
     fig.update_xaxes(
         categoryorder="array",
         categoryarray=sorted(d["Fiscal Year"].unique(), key=sort_fy_only),
         tickangle=0
     )
-
     fig = apply_plot_style(fig, height=CHART_H_TALL)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -1548,11 +1728,10 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         st.warning("⚠️ Enrollment dataset not loaded.")
         st.stop()
 
-    # Sidebar controls
     selected_school = st.sidebar.selectbox("🏫 Select School:", school_options_budget)
 
     metrics_all = ["Budgetted", "October 1 Count", "February 1 Count", "Budget to Enrollment Ratio"]
-    available = sorted(df_budget_long["Metric"].dropna().unique())
+    available   = sorted(df_budget_long["Metric"].dropna().unique())
     metrics_all = [m for m in metrics_all if m in available]
 
     selected_metrics = st.sidebar.multiselect(
@@ -1573,7 +1752,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     ret_lo = st.sidebar.slider("Min Feb/Oct retention", 0.70, 1.00, 0.92, 0.01)
     ret_hi = st.sidebar.slider("Max Feb/Oct retention", 0.80, 1.10, 1.02, 0.01)
 
-    show_intervals = st.sidebar.checkbox("📊 Show simple bands (±1.5% on counts)", value=False)
+    show_intervals   = st.sidebar.checkbox("📊 Show simple bands (±1.5% on counts)", value=False)
     show_model_table = st.sidebar.checkbox("Show model info table", value=True)
 
     run = st.sidebar.button("▶ Run Enrollment Prediction")
@@ -1598,8 +1777,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         y = np.asarray(y, dtype=float)
         if len(y) < 3:
             return 0.0
-        prev = y[:-1]
-        nxt  = y[1:]
+        prev = y[:-1]; nxt = y[1:]
         mask = (prev > 0) & np.isfinite(prev) & np.isfinite(nxt)
         if mask.sum() < 2:
             return 0.0
@@ -1611,8 +1789,7 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         last = float(y[-1])
         g = _robust_pct_change(y)
         g = float(np.clip(g, -max_d, max_g))
-        out = []
-        cur = last
+        out = []; cur = last
         for _ in range(horizon):
             cur = float(cur * (1.0 + g))
             out.append(cur)
@@ -1626,44 +1803,37 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
         merged = pd.merge(
             oct_df[["FY", "sort_key", "ValueNum"]],
             feb_df[["FY", "ValueNum"]],
-            on="FY",
-            how="inner",
-            suffixes=("_Oct", "_Feb")
+            on="FY", how="inner", suffixes=("_Oct", "_Feb")
         ).dropna()
         merged = merged[(merged["ValueNum_Oct"] > 0) & (merged["ValueNum_Feb"] > 0)]
         if merged.empty:
             return None
         merged = merged.sort_values("sort_key").tail(3)
         ratio = float(np.median(merged["ValueNum_Feb"].values / merged["ValueNum_Oct"].values))
-        ratio = float(np.clip(ratio, ret_lo, ret_hi))
-        return ratio
+        return float(np.clip(ratio, ret_lo, ret_hi))
 
     def fmt_val(met_name, v):
         if met_name == "Budget to Enrollment Ratio":
             return f"{v:.0%}"
         return f"{v:,.0f}"
 
-    origin_year = sort_fy_only(freeze_at)
+    origin_year  = sort_fy_only(freeze_at)
     future_years = [fy_label(y) for y in range(origin_year + 1, END_FORECAST_FY + 1)]
-    horizon_y = len(future_years)
+    horizon_y    = len(future_years)
     if horizon_y <= 0:
         st.warning("⚠️ Freeze year is already at/after forecast end.")
         st.stop()
 
-    combined_frames = []
-    model_info_rows = []
+    combined_frames  = []
+    model_info_rows  = []
 
-    # Enrollment special handling
     need_oct = ("October 1 Count" in selected_metrics)
     need_feb = ("February 1 Count" in selected_metrics)
 
     oct_hist_df = _get_series("October 1 Count", freeze_at) if need_oct else pd.DataFrame()
     feb_hist_df = _get_series("February 1 Count", freeze_at) if need_feb else pd.DataFrame()
+    retention   = _estimate_retention_ratio(freeze_at) if need_feb else None
 
-    # Retention ratio (school-specific)
-    retention = _estimate_retention_ratio(freeze_at) if need_feb else None
-
-    # Forecast Oct (conservative)
     oct_future = None
     oct_growth_used = None
     if need_oct:
@@ -1674,131 +1844,86 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
             oct_future, oct_growth_used = _forecast_oct_history(
                 oct_vals, horizon=horizon_y, max_g=max_oct_growth, max_d=max_oct_drop
             )
-
             model_info_rows.append({
-                "Metric": "October 1 Count",
-                "Method": "Conservative bounded YoY",
+                "Metric": "October 1 Count", "Method": "Conservative bounded YoY",
                 "YoY % used": f"{oct_growth_used*100:.2f}%",
                 "Notes": f"Clipped to [-{max_oct_drop*100:.0f}%, +{max_oct_growth*100:.0f}%]"
             })
-
-            # Actual
             combined_frames.append(pd.DataFrame({
-                "FY": oct_hist_df["FY"],
-                "ValueNum": oct_hist_df["ValueNum"],
-                "Metric": "October 1 Count",
-                "Type": "Actual"
+                "FY": oct_hist_df["FY"], "ValueNum": oct_hist_df["ValueNum"],
+                "Metric": "October 1 Count", "Type": "Actual"
+            }))
+            combined_frames.append(pd.DataFrame({
+                "FY": future_years, "ValueNum": oct_future,
+                "Metric": "October 1 Count", "Type": "Forecast (Frozen)"
             }))
 
-            # Forecast
-            combined_frames.append(pd.DataFrame({
-                "FY": future_years,
-                "ValueNum": oct_future,
-                "Metric": "October 1 Count",
-                "Type": "Forecast (Frozen)"
-            }))
-
-    # Forecast Feb (derived from Oct using retention)
     if need_feb:
         if retention is None:
             st.warning("⚠️ Could not compute Feb/Oct retention (insufficient paired history). Feb forecast disabled.")
         else:
             model_info_rows.append({
-                "Metric": "February 1 Count",
-                "Method": "Derived from October",
-                "YoY % used": "",
+                "Metric": "February 1 Count", "Method": "Derived from October", "YoY % used": "",
                 "Notes": f"Feb = Oct × retention, retention={retention:.3f} (clipped {ret_lo:.2f}–{ret_hi:.2f})"
             })
-
-            # Actual Feb
             if not feb_hist_df.empty:
                 combined_frames.append(pd.DataFrame({
-                    "FY": feb_hist_df["FY"],
-                    "ValueNum": feb_hist_df["ValueNum"],
-                    "Metric": "February 1 Count",
-                    "Type": "Actual"
+                    "FY": feb_hist_df["FY"], "ValueNum": feb_hist_df["ValueNum"],
+                    "Metric": "February 1 Count", "Type": "Actual"
                 }))
 
-            # If freeze year Feb is missing, estimate it from freeze-year Oct (if available)
-            freeze_fy_str = str(freeze_at)
-            has_feb_freeze = (not feb_hist_df.empty) and (freeze_fy_str in feb_hist_df["FY"].values)
+            freeze_fy_str   = str(freeze_at)
+            has_feb_freeze  = (not feb_hist_df.empty) and (freeze_fy_str in feb_hist_df["FY"].values)
 
             if (not has_feb_freeze) and need_oct and (not oct_hist_df.empty):
                 oct_freeze_row = oct_hist_df[oct_hist_df["FY"] == freeze_fy_str]
                 if not oct_freeze_row.empty and np.isfinite(oct_freeze_row["ValueNum"].iloc[0]):
                     feb_est = float(oct_freeze_row["ValueNum"].iloc[0] * retention)
                     combined_frames.append(pd.DataFrame([{
-                        "FY": freeze_fy_str,
-                        "ValueNum": feb_est,
-                        "Metric": "February 1 Count",
-                        "Type": "Forecast (Frozen)"
+                        "FY": freeze_fy_str, "ValueNum": feb_est,
+                        "Metric": "February 1 Count", "Type": "Forecast (Frozen)"
                     }]))
 
-            # Future Feb derived from future Oct
             if need_oct and (oct_future is not None):
                 feb_future = (oct_future * retention).astype(float)
-
                 if show_intervals:
-                    band = 0.015  # ±1.5%
+                    band = 0.015
                     combined_frames.append(pd.DataFrame({
-                        "FY": future_years,
-                        "ValueNum": feb_future * (1 - band),
-                        "Metric": "February 1 Count (P10)",
-                        "Type": "Band"
+                        "FY": future_years, "ValueNum": feb_future * (1 - band),
+                        "Metric": "February 1 Count (P10)", "Type": "Band"
                     }))
                     combined_frames.append(pd.DataFrame({
-                        "FY": future_years,
-                        "ValueNum": feb_future * (1 + band),
-                        "Metric": "February 1 Count (P90)",
-                        "Type": "Band"
+                        "FY": future_years, "ValueNum": feb_future * (1 + band),
+                        "Metric": "February 1 Count (P90)", "Type": "Band"
                     }))
-
                 combined_frames.append(pd.DataFrame({
-                    "FY": future_years,
-                    "ValueNum": feb_future,
-                    "Metric": "February 1 Count",
-                    "Type": "Forecast (Frozen)"
+                    "FY": future_years, "ValueNum": feb_future,
+                    "Metric": "February 1 Count", "Type": "Forecast (Frozen)"
                 }))
 
-    # Non-enrollment metrics (optional): keep your existing forecast engine
     for met in selected_metrics:
         if met in ["October 1 Count", "February 1 Count"]:
             continue
-
         is_ratio = (met == "Budget to Enrollment Ratio")
         dh = _get_series(met, freeze_at)
         if len(dh) < 3:
             st.warning(f"⚠️ Not enough history for {met} (need ≥ 3).")
             continue
-
         y_hist = dh["ValueNum"].values.astype(float)
-
         y_future, chosen_model, scores, chosen_fn = forecast_timeseries(
             y=y_hist, q=None, horizon=horizon_y,
             model_choice="Seasonal Naive + Drift (recommended baseline)",
-            season_period=1,
-            is_ratio=is_ratio
+            season_period=1, is_ratio=is_ratio
         )
-
         model_info_rows.append({
-            "Metric": met,
-            "Method": "Time-series",
-            "YoY % used": "",
+            "Metric": met, "Method": "Time-series", "YoY % used": "",
             "Notes": f"Model: {chosen_model}"
         })
-
         combined_frames.append(pd.DataFrame({
-            "FY": dh["FY"],
-            "ValueNum": dh["ValueNum"],
-            "Metric": met,
-            "Type": "Actual"
+            "FY": dh["FY"], "ValueNum": dh["ValueNum"], "Metric": met, "Type": "Actual"
         }))
-
         combined_frames.append(pd.DataFrame({
-            "FY": future_years,
-            "ValueNum": y_future,
-            "Metric": met,
-            "Type": "Forecast (Frozen)"
+            "FY": future_years, "ValueNum": y_future, "Metric": met, "Type": "Forecast (Frozen)"
         }))
 
     if not combined_frames:
@@ -1809,16 +1934,13 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
     combined["sort_key"] = combined["FY"].apply(sort_fy_only)
 
     fig = go.Figure()
-    metrics_to_plot = [m for m in selected_metrics]
-
-    for met in metrics_to_plot:
+    for met in selected_metrics:
         for tname in ["Actual", "Forecast (Frozen)"]:
             dt = combined[(combined["Metric"] == met) & (combined["Type"] == tname)].sort_values("sort_key")
             if dt.empty:
                 continue
             fig.add_trace(go.Bar(
-                x=dt["FY"],
-                y=dt["ValueNum"],
+                x=dt["FY"], y=dt["ValueNum"],
                 name=f"{met} — {tname}",
                 marker_color=ENROLL_COLORS.get((met, tname), None),
                 opacity=0.95 if tname == "Actual" else 0.78,
@@ -1826,35 +1948,283 @@ elif metric_group == "Budget/Enrollment Predicted (Bar)":
                 textposition="outside"
             ))
 
-    fig.update_layout(
-        barmode="group",
-        bargap=BARGAP,
-        bargroupgap=BARGROUPGAP,
-    )
+    fig.update_layout(barmode="group", bargap=BARGAP, bargroupgap=BARGROUPGAP)
     fig.update_xaxes(categoryorder="array", categoryarray=FY22_TO_FY28, tickangle=0)
-
     fig = apply_plot_style(fig, height=700)
-
     fig.update_layout(
         title=dict(text=f"{selected_school} — Enrollment Predicted (Freeze at {freeze_at})", x=0.01, y=0.985),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.28,
-            xanchor="left",
-            x=0.01
-        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.28, xanchor="left", x=0.01),
         margin=dict(t=230, r=40, b=90, l=60),
-        uniformtext_mode="show",
-        uniformtext_minsize=11
+        uniformtext_mode="show", uniformtext_minsize=11
     )
-
     fig.update_traces(cliponaxis=False)
     st.plotly_chart(fig, use_container_width=True)
 
     if show_model_table and model_info_rows:
         st.markdown("### 🧠 Forecast Method Summary")
         st.dataframe(pd.DataFrame(model_info_rows), use_container_width=True)
+
+# ============================================================
+# NEW: PREDICTIVE RISK MODEL
+# ============================================================
+elif metric_group == "Predictive Risk Model":
+    st.markdown("## 🤖 Predictive Risk Model — Next-Quarter Financial Risk")
+    st.caption(
+        "Uses quarter-level lag features from CSAF and balance-sheet metrics "
+        "to forecast each school's next-quarter risk tier: **Low / Medium / High**."
+    )
+
+    # ── Build dataset & train ──────────────────────────────────────────────────
+    with st.spinner("Building risk features and training model…"):
+        df_feat = _build_risk_dataset(df)
+        feat_cols_present = [c for c in RISK_FEATURE_COLS if c in df.columns]
+        clf, ml_cols, clf_classes = _train_risk_model(df_feat)
+
+    if clf is None:
+        st.error(
+            "❌ Not enough historical data to train the risk model. "
+            "Need at least 2+ quarters per school."
+        )
+        st.stop()
+
+    # ── Predict for the latest quarter of every school ────────────────────────
+    exclude_cols = {
+        "Schools", "Fiscal Year", "_sort_key",
+        "_risk_label", "_risk_score", "_next_q_risk",
+        "_expense_over_revenue",
+    }
+
+    latest_rows = (
+        df_feat.sort_values("_sort_key")
+        .groupby("Schools", sort=False)
+        .last()
+        .reset_index()
+    )
+
+    X_latest = (
+        latest_rows[ml_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .values
+    )
+
+    pred_labels = clf.predict(X_latest)
+    pred_probas = clf.predict_proba(X_latest)        # shape (n_schools, n_classes)
+    class_order = list(clf_classes)
+
+    latest_rows["Predicted Next-Q Risk"] = pred_labels
+    latest_rows["Confidence"] = [
+        float(pred_probas[i, class_order.index(pred_labels[i])]) * 100
+        for i in range(len(pred_labels))
+    ]
+
+    # ── Sidebar: school selector ───────────────────────────────────────────────
+    selected_school_rm = st.sidebar.selectbox(
+        "🏫 Select School (detail view):",
+        sorted(latest_rows["Schools"].tolist())
+    )
+
+    # ── Pull data for selected school ─────────────────────────────────────────
+    school_row        = latest_rows[latest_rows["Schools"] == selected_school_rm].iloc[0]
+    school_hist       = df_feat[df_feat["Schools"] == selected_school_rm].sort_values("_sort_key")
+    school_latest_hist = school_hist.iloc[-1] if not school_hist.empty else pd.Series(dtype=float)
+
+    pred_risk  = school_row["Predicted Next-Q Risk"]
+    confidence = school_row["Confidence"]
+    current_fy = school_row["Fiscal Year"]
+
+    risk_color = {"High": "#dc2626", "Medium": "#f59e0b", "Low": "#16a34a"}.get(pred_risk, "#6b7280")
+    risk_emoji = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(pred_risk, "⚪")
+
+    # ── Hero risk card ─────────────────────────────────────────────────────────
+    st.markdown(
+        f"""
+        <div style="
+            background: {risk_color}18;
+            border: 2px solid {risk_color};
+            border-radius: 14px;
+            padding: 18px 22px;
+            margin-bottom: 18px;
+        ">
+          <div style="font-size:13px;text-transform:uppercase;letter-spacing:.08em;
+                      color:#485569;font-weight:700;">
+            {selected_school_rm} — Forecast based on {current_fy}
+          </div>
+          <div style="font-size:36px;font-weight:900;color:{risk_color};margin:6px 0 2px 0;">
+            {risk_emoji} Next-Quarter Risk: {pred_risk}
+          </div>
+          <div style="font-size:14px;color:#374151;">
+            Model confidence: <strong>{confidence:.1f}%</strong>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # ── KPI strip ─────────────────────────────────────────────────────────────
+    def _kv(col):
+        return school_latest_hist.get(col, np.nan)
+
+    fb_v  = _kv("FB Ratio")
+    cr_v  = _kv("Current Ratio")
+    dch_v = _kv("Unrestricted Days COH")
+    la_v  = _kv("Liabilities to Assets")
+
+    def _metric_tile(col_obj, label, value_str, good: bool):
+        color = "#16a34a" if good else "#dc2626"
+        col_obj.markdown(
+            f"""<div style="border:1px solid {color}33;border-radius:10px;
+                           padding:12px 14px;background:{color}0d;">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;
+                        color:#6b7280;font-weight:700;">{label}</div>
+            <div style="font-size:26px;font-weight:800;color:{color};">{value_str}</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
+    k1, k2, k3, k4 = st.columns(4)
+    _metric_tile(k1, "FB Ratio",
+                 f"{fb_v:.1%}" if np.isfinite(fb_v) else "—",
+                 np.isfinite(fb_v) and fb_v >= 0.10)
+    _metric_tile(k2, "Current Ratio",
+                 f"{cr_v:.2f}" if np.isfinite(cr_v) else "—",
+                 np.isfinite(cr_v) and cr_v >= 1.50)
+    _metric_tile(k3, "Days Cash on Hand",
+                 f"{dch_v:,.0f}" if np.isfinite(dch_v) else "—",
+                 np.isfinite(dch_v) and dch_v >= 60)
+    _metric_tile(k4, "Liabilities / Assets",
+                 f"{la_v:.2f}" if np.isfinite(la_v) else "—",
+                 np.isfinite(la_v) and la_v <= 0.90)
+
+    st.markdown("")
+
+    # ── Narrative explanation ──────────────────────────────────────────────────
+    explanations = _explain_risk(school_latest_hist, feat_cols_present)
+
+    st.markdown("#### 📋 Risk Explanation")
+    if pred_risk == "Low":
+        st.success(
+            "No significant risk factors detected. "
+            "School appears financially stable heading into next quarter."
+        )
+    else:
+        for ex in explanations:
+            icon = "🔴" if pred_risk == "High" else "🟡"
+            st.markdown(f"- {icon} {ex}")
+
+    # ── Detail metric table ────────────────────────────────────────────────────
+    st.markdown("#### 📊 Current & Change Metrics")
+    detail_metrics = [
+        "FB Ratio", "Current Ratio", "Liabilities to Assets",
+        "Unrestricted Days COH", "Unrestricted Cash & Equivalents",
+        "Total Revenue", "Total Expenses",
+    ]
+    detail_rows = []
+    for col in detail_metrics:
+        v_curr = school_latest_hist.get(col, np.nan)
+        v_chg  = school_latest_hist.get(f"{col}_chg", np.nan)
+        v_lag1 = school_latest_hist.get(f"{col}_lag1", np.nan)
+
+        is_dollar  = col in ("Unrestricted Cash & Equivalents", "Total Revenue", "Total Expenses")
+        is_pct     = col in ("FB Ratio",)
+        is_plain   = col in ("Current Ratio", "Liabilities to Assets")
+        is_days    = col in ("Unrestricted Days COH",)
+
+        def _fmt_v(v):
+            if pd.isna(v):   return "—"
+            if is_pct:       return f"{v:.1%}"
+            if is_plain:     return f"{v:.2f}"
+            if is_days:      return f"{v:,.0f} days"
+            return f"${v:,.0f}"
+
+        def _fmt_chg(v):
+            if pd.isna(v):   return "—"
+            if is_pct:       return f"{v:+.1%}"
+            if is_plain:     return f"{v:+.2f}"
+            if is_days:      return f"{v:+,.0f} days"
+            return f"${v:+,.0f}"
+
+        detail_rows.append({
+            "Metric":          col,
+            "Current Quarter": _fmt_v(v_curr),
+            "Prior Quarter":   _fmt_v(v_lag1),
+            "Change":          _fmt_chg(v_chg),
+        })
+
+    st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── All HIGH-risk schools ─────────────────────────────────────────────────
+    st.markdown("#### 🔴 All Schools Forecasted HIGH Risk Next Quarter")
+    display_cols = [
+        "Schools", "Fiscal Year", "Predicted Next-Q Risk", "Confidence",
+        "FB Ratio", "Current Ratio", "Unrestricted Days COH", "Liabilities to Assets"
+    ]
+    avail_display = [c for c in display_cols if c in latest_rows.columns]
+    high_df = (
+        latest_rows[latest_rows["Predicted Next-Q Risk"] == "High"][avail_display]
+        .copy()
+        .sort_values("Confidence", ascending=False)
+        .reset_index(drop=True)
+    )
+    # Format columns for readability
+    if "FB Ratio" in high_df.columns:
+        high_df["FB Ratio"] = high_df["FB Ratio"].apply(
+            lambda v: f"{v:.1%}" if pd.notna(v) else "—"
+        )
+    for col in ["Current Ratio", "Liabilities to Assets"]:
+        if col in high_df.columns:
+            high_df[col] = high_df[col].apply(
+                lambda v: f"{v:.2f}" if pd.notna(v) else "—"
+            )
+    if "Unrestricted Days COH" in high_df.columns:
+        high_df["Unrestricted Days COH"] = high_df["Unrestricted Days COH"].apply(
+            lambda v: f"{v:,.0f}" if pd.notna(v) else "—"
+        )
+    high_df["Confidence"] = high_df["Confidence"].apply(lambda v: f"{v:.1f}%")
+    high_df.rename(columns={"Fiscal Year": "Latest Actual Quarter"}, inplace=True)
+
+    if high_df.empty:
+        st.success("✅ No schools are currently forecasted as High Risk next quarter.")
+    else:
+        st.dataframe(high_df, use_container_width=True, hide_index=True)
+
+    # ── Full ranking table ────────────────────────────────────────────────────
+    st.markdown("#### 🏫 All Schools — Next-Quarter Risk Ranking")
+    risk_order = {"High": 0, "Medium": 1, "Low": 2}
+    rank_df = (
+        latest_rows[["Schools", "Fiscal Year", "Predicted Next-Q Risk", "Confidence"]]
+        .copy()
+        .assign(_rank_sort=latest_rows["Predicted Next-Q Risk"].map(risk_order))
+        .sort_values(["_rank_sort", "Confidence"], ascending=[True, False])
+        .drop(columns="_rank_sort")
+        .reset_index(drop=True)
+    )
+    rank_df["Confidence"] = rank_df["Confidence"].apply(lambda v: f"{v:.1f}%")
+    rank_df.rename(columns={"Fiscal Year": "Latest Actual Quarter"}, inplace=True)
+    rank_df.index = rank_df.index + 1    # 1-based ranking
+    st.dataframe(rank_df, use_container_width=True)
+
+    # ── Feature importance table ──────────────────────────────────────────────
+    st.markdown("#### 🧠 Top Feature Importances (Model Drivers)")
+    feat_imp_df = (
+        pd.DataFrame({"Feature": ml_cols, "Importance": clf.feature_importances_})
+        .sort_values("Importance", ascending=False)
+        .head(20)
+        .reset_index(drop=True)
+    )
+    feat_imp_df["Importance"] = feat_imp_df["Importance"].apply(lambda v: f"{v:.4f}")
+    st.dataframe(feat_imp_df, use_container_width=True, hide_index=True)
+
+    # ── Download predictions CSV ──────────────────────────────────────────────
+    csv_bytes = rank_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇ Download Risk Predictions (CSV)",
+        data=csv_bytes,
+        file_name="nola_next_quarter_risk_predictions.csv",
+        mime="text/csv"
+    )
 
 # ============================================================
 # 5) OTHER METRICS — FACETED (4 PANELS PER ROW)
@@ -1889,7 +2259,6 @@ else:
 
     filtered["ValueNum"] = pd.to_numeric(filtered["Value"], errors="coerce")
     filtered = filtered.dropna(subset=["ValueNum"])
-
     filtered["sort_key"] = filtered["Fiscal Year"].apply(sort_fy)
     filtered = filtered.sort_values("sort_key")
 
@@ -1898,7 +2267,7 @@ else:
         st.stop()
 
     filtered["FY Group"] = filtered["Fiscal Year"].astype(str).str.split().str[0]
-    filtered["Label"] = filtered["ValueNum"].apply(lambda v: f"${v:,.0f}")
+    filtered["Label"]    = filtered["ValueNum"].apply(lambda v: f"${v:,.0f}")
 
     if len(selected_metrics) == 1:
         metric_title = selected_metrics[0]
@@ -1907,8 +2276,8 @@ else:
     else:
         metric_title = f"{len(selected_metrics)} Metrics Selected"
 
-    n_metrics = max(1, len(selected_metrics))
-    rows = math.ceil(n_metrics / 4)
+    n_metrics  = max(1, len(selected_metrics))
+    rows       = math.ceil(n_metrics / 4)
     fig_height = 360 * rows + 320
 
     fig = px.bar(
@@ -1919,7 +2288,7 @@ else:
         color_discrete_map=fy_color_map,
         barmode="group",
         facet_col="Metric",
-        facet_col_wrap=4,              # 4 panels per row
+        facet_col_wrap=4,
         facet_col_spacing=0.06,
         facet_row_spacing=0.12,
         text="Label",
@@ -1935,22 +2304,9 @@ else:
         cliponaxis=False,
         width=0.42
     )
-
-    fig.update_layout(
-        uniformtext_mode="show",
-        uniformtext_minsize=11
-    )
-
-    fig.update_yaxes(
-        tickprefix="$",
-        separatethousands=True
-    )
-
-    fig.update_layout(
-        bargap=0.12,
-        bargroupgap=0.05
-    )
-
+    fig.update_layout(uniformtext_mode="show", uniformtext_minsize=11)
+    fig.update_yaxes(tickprefix="$", separatethousands=True)
+    fig.update_layout(bargap=0.12, bargroupgap=0.05)
     fig.update_layout(
         title=dict(x=0.01, y=0.985),
         legend=dict(
@@ -1964,8 +2320,6 @@ else:
         ),
         margin=dict(r=340, t=140, b=90)
     )
-
     fig.update_xaxes(tickangle=30)
-
     fig = apply_plot_style(fig, height=fig_height)
     st.plotly_chart(fig, use_container_width=True)
